@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>POLAR BATTLESHIP // SONAR COMMAND</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&family=Share+Tech+Mono&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="scanlines"></div>
+<div class="grain"></div>
+
+<header class="hud-header">
+  <div class="hud-cluster left">
+    <span class="hud-tag">SYS</span>
+    <span class="hud-val" id="sys-status">ONLINE</span>
+  </div>
+  <h1 class="title">
+    <span class="title-main">POLAR BATTLESHIP</span>
+    <span class="title-sub">// SONAR COMMAND v4.7</span>
+  </h1>
+  <div class="hud-cluster right">
+    <span class="hud-tag">TIME</span>
+    <span class="hud-val" id="clock">00:00:00</span>
+  </div>
+</header>
+
+<main class="boards">
+  <section class="board-card" id="player-card">
+    <div class="card-header">
+      <span class="card-label">FRIENDLY</span>
+      <span class="card-id">ALPHA-01</span>
+    </div>
+    <canvas id="player-canvas" width="560" height="560"></canvas>
+    <div class="card-footer">
+      <span class="fleet-tag">FLEET STATUS</span>
+      <div class="fleet-list" id="player-fleet"></div>
+    </div>
+  </section>
+
+  <section class="board-card" id="cpu-card">
+    <div class="card-header">
+      <span class="card-label">HOSTILE</span>
+      <span class="card-id">SECTOR-7G</span>
+    </div>
+    <canvas id="cpu-canvas" width="560" height="560"></canvas>
+    <div class="card-footer">
+      <span class="fleet-tag">TARGETS DOWN</span>
+      <div class="fleet-list" id="cpu-fleet"></div>
+    </div>
+  </section>
+</main>
+
+<div class="status-bar" id="status-bar">
+  <span class="prompt">&gt;</span>
+  <span id="status-text">INITIALIZING SONAR ARRAY...</span>
+</div>
+
+<section class="controls" id="controls" hidden>
+  <div class="control-group">
+    <label class="ctrl-label">RADIUS</label>
+    <div class="radius-buttons" id="radius-buttons"></div>
+  </div>
+  <div class="control-group angle-group">
+    <label class="ctrl-label">BEARING (θ)</label>
+    <div class="angle-grid" id="angle-grid"></div>
+  </div>
+  <div class="control-group fire-group">
+    <button id="fire-btn" class="fire-btn">
+      <span class="fire-label">FIRE</span>
+      <span class="fire-glyph">▲</span>
+    </button>
+  </div>
+</section>
+
+<div id="banner" class="banner hidden"></div>
+
+<script src="game.js"></script>
+</body>
+</html>
