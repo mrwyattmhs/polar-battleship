@@ -149,6 +149,8 @@ const state = {
   selectedRadius: 1,
   selectedAngleIdx: 0,
   sonarAngleDeg: 0,
+  prevSonarAngleDeg: 0,    // last frame's sweep angle, for crossing detection
+  pings: [],               // active hit-pings: { ai, r, t } where t is elapsed seconds
 };
 
 // ---------- Canvas setup ----------
@@ -157,23 +159,30 @@ const cpuCanvas = document.getElementById('cpu-canvas');
 const pctx = playerCanvas.getContext('2d');
 const cctx = cpuCanvas.getContext('2d');
 
-// Make canvases crisp on retina
-function setupCanvas(canvas, ctx) {
+// Ensure a canvas's backing store matches its current displayed CSS size.
+// Safe to call every frame: it only does work when the size actually changed
+// (e.g. after the placement->guessing layout switch, or a window resize).
+// Returns the CSS-pixel size to draw with.
+function syncCanvas(canvas, ctx) {
   const dpr = window.devicePixelRatio || 1;
-  const size = canvas.clientWidth;
-  canvas.width = size * dpr;
-  canvas.height = size * dpr;
-  ctx.scale(dpr, dpr);
-  return size;
+  const cssSize = canvas.clientWidth;
+  if (cssSize === 0) return 0;            // not laid out yet; skip this frame
+  const wantW = Math.round(cssSize * dpr);
+  if (canvas.width !== wantW) {
+    // Setting canvas.width resets the context transform to identity.
+    canvas.width = wantW;
+    canvas.height = wantW;
+  }
+  // Re-apply the dpr transform every call so drawing uses CSS-pixel coords.
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return cssSize;
 }
-let CANVAS_SIZE = setupCanvas(playerCanvas, pctx);
-setupCanvas(cpuCanvas, cctx);
+
+let CANVAS_SIZE = syncCanvas(playerCanvas, pctx);
+syncCanvas(cpuCanvas, cctx);
 window.addEventListener('resize', () => {
-  // Reset transform before re-scaling
-  pctx.setTransform(1, 0, 0, 1, 0, 0);
-  cctx.setTransform(1, 0, 0, 1, 0, 0);
-  CANVAS_SIZE = setupCanvas(playerCanvas, pctx);
-  setupCanvas(cpuCanvas, cctx);
+  CANVAS_SIZE = syncCanvas(playerCanvas, pctx);
+  syncCanvas(cpuCanvas, cctx);
   redrawAll();
 });
 
@@ -297,6 +306,62 @@ function drawSonarSweep(ctx, size) {
   ctx.moveTo(cx, cy);
   ctx.lineTo(cx + maxR * Math.cos(aLeadRad), cy + maxR * Math.sin(aLeadRad));
   ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+// ---------- Hit-target sonar pings ----------
+const PING_DURATION = 0.9;  // seconds for a ping to expand and fade
+
+// True if the sweep's leading edge moved across `targetDeg` this frame.
+// All values are degrees in [0, 360), sweep advances by a positive step.
+function sweepCrossed(prevDeg, curDeg, targetDeg) {
+  // Normalize so we measure forward travel from prevDeg.
+  const span = ((curDeg - prevDeg) % 360 + 360) % 360;
+  const offset = ((targetDeg - prevDeg) % 360 + 360) % 360;
+  return offset <= span;
+}
+
+// Each frame: if the sweep crossed the bearing of an already-hit CPU cell,
+// start a fresh ping there.
+function updatePings(dt) {
+  // Advance / retire existing pings
+  for (const p of state.pings) p.t += dt;
+  state.pings = state.pings.filter(p => p.t < PING_DURATION);
+
+  // Detect new crossings over hit cells
+  for (const [ai, r] of state.cpuHitPoints) {
+    const bearingDeg = (specialAngles[ai] * 180 / Math.PI) % 360;
+    if (sweepCrossed(state.prevSonarAngleDeg, state.sonarAngleDeg, bearingDeg)) {
+      // Refresh the ping for this cell (replace any in-flight one)
+      state.pings = state.pings.filter(p => !(p.ai === ai && p.r === r));
+      state.pings.push({ ai, r, t: 0 });
+    }
+  }
+}
+
+function drawPings(ctx, size) {
+  for (const p of state.pings) {
+    const { x, y } = polarToXY(p.ai, p.r, size);
+    const prog = p.t / PING_DURATION;          // 0 -> 1
+    const ringR = 6 + prog * 26;               // expanding radius
+    const alpha = (1 - prog) * 0.85;           // fading out
+
+    // Expanding ring
+    ctx.strokeStyle = `rgba(255, 77, 94, ${alpha})`;
+    ctx.lineWidth = 2.5 * (1 - prog) + 0.5;
+    ctx.shadowColor = '#ff4d5e';
+    ctx.shadowBlur = 16 * (1 - prog);
+    ctx.beginPath();
+    ctx.arc(x, y, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Bright core flare, strongest at the start of the ping
+    const coreAlpha = (1 - prog) * (1 - prog) * 0.9;
+    ctx.fillStyle = `rgba(255, 200, 205, ${coreAlpha})`;
+    ctx.beginPath();
+    ctx.arc(x, y, 4 + (1 - prog) * 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.shadowBlur = 0;
 }
 
@@ -437,7 +502,8 @@ function drawStar(ctx, cx, cy, spikes, outerR, innerR) {
 
 // ---------- Redraw ----------
 function redrawPlayer() {
-  const size = playerCanvas.clientWidth;
+  const size = syncCanvas(playerCanvas, pctx);
+  if (size === 0) return;            // not laid out yet
   pctx.clearRect(0, 0, size, size);
   drawGrid(pctx, size, false);
   state.shipsPlayer.forEach((ship, idx) => {
@@ -446,11 +512,13 @@ function redrawPlayer() {
   drawHitsMisses(pctx, size, state.playerHitPoints, state.playerMissPoints);
 }
 function redrawCpu() {
-  const size = cpuCanvas.clientWidth;
+  const size = syncCanvas(cpuCanvas, cctx);
+  if (size === 0) return;            // not laid out yet (e.g. hidden in placement)
   cctx.clearRect(0, 0, size, size);
   drawGrid(cctx, size, true);
   drawSonarSweep(cctx, size);
   drawHitsMisses(cctx, size, state.cpuHitPoints, state.cpuMissPoints);
+  drawPings(cctx, size);
 }
 function redrawAll() { redrawPlayer(); redrawCpu(); }
 
@@ -458,9 +526,18 @@ function redrawAll() { redrawPlayer(); redrawCpu(); }
 let lastFrame = performance.now();
 const SONAR_DEG_PER_SEC = 36; // one rev per 10 seconds
 function animate(now) {
-  const dt = (now - lastFrame) / 1000;
+  // Clamp dt: the very first frame (or a backgrounded tab) can produce a
+  // huge gap since lastFrame was set at load time. An unclamped dt makes the
+  // sweep angle jump hundreds of degrees and land at a bogus value.
+  let dt = (now - lastFrame) / 1000;
+  if (dt > 0.1 || dt < 0) dt = 0.016;   // cap at ~one frame
   lastFrame = now;
-  state.sonarAngleDeg = (state.sonarAngleDeg + SONAR_DEG_PER_SEC * dt) % 360;
+  state.prevSonarAngleDeg = state.sonarAngleDeg;
+  // Positive modulo: JS '%' keeps the dividend's sign, which can yield a
+  // negative angle. ((x % 360) + 360) % 360 forces [0, 360).
+  const raw = state.sonarAngleDeg + SONAR_DEG_PER_SEC * dt;
+  state.sonarAngleDeg = ((raw % 360) + 360) % 360;
+  updatePings(dt);
   redrawCpu();
   requestAnimationFrame(animate);
 }
@@ -606,10 +683,14 @@ function generateCpuShips() {
 // ---------- Guessing phase ----------
 function startGuessingPhase() {
   state.phase = 'guess';
+  document.body.classList.remove('phase-place');
   document.getElementById('controls').hidden = false;
   buildRadiusButtons();
   buildAngleButtons();
   setStatus('SONAR ACTIVE. SELECT RADIUS AND BEARING, THEN FIRE.');
+  // The animation loop's redrawCpu() self-syncs the canvas size every frame,
+  // so the layout change is picked up automatically once it reflows.
+  redrawPlayer();
 }
 
 function buildRadiusButtons() {
@@ -896,17 +977,21 @@ function resetGame() {
   state.cpuHitStreak.length = 0;
   state.selectedRadius = 1;
   state.selectedAngleIdx = 0;
+  state.pings.length = 0;
 
   // Hide banner + controls
   document.getElementById('banner').className = 'banner hidden';
   document.getElementById('controls').hidden = true;
+  document.body.classList.add('phase-place');
 
-  setStatus(`PLACE YOUR ${SHIP_NAMES[0]} (${SHIP_SIZES[0]} PTS). CLICK FRIENDLY GRID TO PLACE POINTS.`);
+  setStatus(`DEPLOY YOUR FLEET — PLACE THE ${SHIP_NAMES[0]} (${SHIP_SIZES[0]} POINTS). CLICK THE FRIENDLY GRID TO BEGIN.`);
   renderFleets();
-  redrawAll();
+  // redrawCpu()/redrawPlayer() self-sync the canvas size each call, so the
+  // layout change is handled automatically.
+  redrawPlayer();
 }
 
 // ---------- Init ----------
-setStatus(`PLACE YOUR ${SHIP_NAMES[0]} (${SHIP_SIZES[0]} PTS). CLICK FRIENDLY GRID TO PLACE POINTS.`);
+setStatus(`DEPLOY YOUR FLEET — PLACE THE ${SHIP_NAMES[0]} (${SHIP_SIZES[0]} POINTS). CLICK THE FRIENDLY GRID TO BEGIN.`);
 renderFleets();
 redrawAll();

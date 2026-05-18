@@ -427,3 +427,77 @@ canvas {
   .controls { grid-template-columns: 1fr; }
   .angle-grid { grid-template-columns: repeat(6, 1fr); }
 }
+
+/* ===== PHASE 1: PLACEMENT ===== */
+/* During placement only the friendly board is shown, centered. */
+.phase-place .boards {
+  grid-template-columns: 1fr;
+  max-width: 560px;
+}
+.phase-place #cpu-card {
+  display: none;
+}
+
+/* Deployment-orders panel: visible only in the placement phase. */
+.deploy-orders {
+  display: none;
+  border: 1px solid var(--phosphor-dim);
+  background: linear-gradient(to bottom, #0a1c20, #06141a);
+  padding: 9px 11px 10px;
+  margin-bottom: 7px;
+}
+.phase-place .deploy-orders {
+  display: block;
+}
+.deploy-title {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  color: var(--phosphor);
+  text-shadow: 0 0 6px var(--phosphor-glow);
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+.deploy-line {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--text-main);
+  line-height: 1.45;
+  margin-bottom: 5px;
+}
+.deploy-steps {
+  list-style: none;
+  counter-reset: deploy;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 5px;
+}
+.deploy-steps li {
+  counter-increment: deploy;
+  position: relative;
+  padding-left: 20px;
+  font-size: 9.5px;
+  letter-spacing: 0.03em;
+  color: var(--text-main);
+  line-height: 1.4;
+}
+.deploy-steps li::before {
+  content: counter(deploy);
+  position: absolute;
+  left: 0; top: 0;
+  width: 14px; height: 14px;
+  border: 1px solid var(--phosphor-dim);
+  color: var(--phosphor);
+  font-size: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.deploy-foot {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 0.18em;
+  color: var(--text-mute);
+  text-transform: uppercase;
+}

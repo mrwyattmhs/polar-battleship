@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&family=Share+Tech+Mono&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="phase-place">
 
 <div class="scanlines"></div>
 <div class="grain"></div>
@@ -21,7 +21,7 @@
   </div>
   <h1 class="title">
     <span class="title-main">POLAR BATTLESHIP</span>
-    <span class="title-sub">// SONAR COMMAND v4.7</span>
+    <span class="title-sub">// SONAR COMMAND v1.1</span>
   </h1>
   <div class="hud-cluster right">
     <span class="hud-tag">TIME</span>
@@ -34,6 +34,17 @@
     <div class="card-header">
       <span class="card-label">FRIENDLY</span>
       <span class="card-id">ALPHA-01</span>
+    </div>
+    <div class="deploy-orders" id="deploy-orders">
+      <span class="deploy-title">// DEPLOYMENT ORDERS</span>
+      <p class="deploy-line">Position your fleet on the friendly grid before engaging the enemy.</p>
+      <ol class="deploy-steps">
+        <li>Click grid intersections to lay each ship, point by point.</li>
+        <li>Every point must touch an end of the current ship &mdash; along an arc or a radius.</li>
+        <li>Each ship locks straight once two points are set; no bends.</li>
+        <li>DESTROYER (2) &rarr; BATTLESHIP (3) &rarr; CARRIER (4), in order.</li>
+      </ol>
+      <span class="deploy-foot">Hostile sector stays dark until your fleet is deployed.</span>
     </div>
     <canvas id="player-canvas" width="560" height="560"></canvas>
     <div class="card-footer">
