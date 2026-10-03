@@ -1,0 +1,1311 @@
+diff --git a/game.js b/game.js
+index 6fe38ab..804e3fc 100644
+--- a/game.js
++++ b/game.js
+@@ -151,6 +151,13 @@ const state = {
+   sonarAngleDeg: 0,
+   prevSonarAngleDeg: 0,    // last frame's sweep angle, for crossing detection
+   pings: [],               // active hit-pings: { ai, r, t } where t is elapsed seconds
++  place: {                 // ship-placement UI state
++    anchor: null,          // chosen start berth [ai, r], or null
++    hover: null,           // berth under the pointer
++    dragging: false,
++    msg: '',               // transient warning shown in the banner
++    msgTimer: null,
++  },
+ };
+ 
+ // ---------- Canvas setup ----------
+@@ -200,40 +207,79 @@ function polarToXY(ai, r, size) {
+   };
+ }
+ 
++// ---------- Helpers ----------
++function hexToRgba(hex, a) {
++  const n = parseInt(hex.slice(1), 16);
++  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
++}
++// Drawing scale: 1.0 at the original 560px board, never smaller than 0.75 so
++// berths and hulls stay readable on small phone screens.
++function uScale(size) { return Math.max(0.75, size / 560); }
++
+ // ---------- Grid drawing ----------
+ function drawGrid(ctx, size, isCpu) {
++  const u = uScale(size);
+   const cx = size / 2, cy = size / 2;
+   const maxR = (size / 2) - 30;
++  const tint = isCpu ? '125, 200, 255' : '93, 255, 196';
++
++  // Water depth: each ring adds a translucent layer, so the centre reads as deepest
++  ctx.fillStyle = isCpu ? 'rgba(30, 70, 120, 0.055)' : 'rgba(20, 90, 100, 0.055)';
++  for (let r = R_MAX; r >= 1; r--) {
++    ctx.beginPath();
++    ctx.arc(cx, cy, (r / R_MAX) * maxR, 0, Math.PI * 2);
++    ctx.fill();
++  }
+ 
+   // Radial circles
+-  ctx.strokeStyle = 'rgba(45, 90, 110, 0.5)';
++  ctx.strokeStyle = 'rgba(70, 130, 150, 0.5)';
+   ctx.lineWidth = 1;
+   for (let r = 1; r <= R_MAX; r++) {
+     ctx.beginPath();
+     ctx.arc(cx, cy, (r / R_MAX) * maxR, 0, Math.PI * 2);
+     ctx.stroke();
+   }
++  // Outer bezel
++  ctx.strokeStyle = `rgba(${tint}, 0.4)`;
++  ctx.lineWidth = 2;
++  ctx.beginPath();
++  ctx.arc(cx, cy, maxR + 5 * u, 0, Math.PI * 2);
++  ctx.stroke();
+ 
+-  // Angular spokes
+-  ctx.strokeStyle = 'rgba(45, 90, 110, 0.35)';
++  // Angular spokes (axes a little brighter)
+   for (let i = 0; i < N_ANG; i++) {
+     const theta = specialAngles[i];
++    const axis = i % 4 === 0 && Math.abs(Math.sin(theta * 2)) < 1e-9;
++    ctx.strokeStyle = axis ? 'rgba(70, 130, 150, 0.55)' : 'rgba(55, 105, 125, 0.32)';
++    ctx.lineWidth = 1;
+     ctx.beginPath();
+     ctx.moveTo(cx, cy);
+     ctx.lineTo(cx + maxR * Math.cos(theta), cy - maxR * Math.sin(theta));
+     ctx.stroke();
+   }
+ 
++  // Degree ticks just inside the bezel (every 5 degrees, longer every 15)
++  ctx.strokeStyle = `rgba(${tint}, 0.35)`;
++  ctx.lineWidth = 1;
++  for (let d = 0; d < 360; d += 5) {
++    const a = d * Math.PI / 180;
++    const len = (d % 15 === 0 ? 7 : 4) * u;
++    ctx.beginPath();
++    ctx.moveTo(cx + (maxR - len) * Math.cos(a), cy - (maxR - len) * Math.sin(a));
++    ctx.lineTo(cx + maxR * Math.cos(a), cy - maxR * Math.sin(a));
++    ctx.stroke();
++  }
++
+   // Angle labels
+   ctx.fillStyle = '#9ad6bf';
+-  ctx.font = 'bold 12px "Share Tech Mono"';
++  ctx.font = `bold ${Math.round(12 * Math.max(1, u * 0.95))}px "Share Tech Mono"`;
+   ctx.textAlign = 'center';
+   ctx.textBaseline = 'middle';
+   ctx.shadowColor = 'rgba(93, 255, 196, 0.4)';
+   ctx.shadowBlur = 4;
+   for (let i = 0; i < N_ANG; i++) {
+     const theta = specialAngles[i];
+-    const lblR = maxR + 16;
++    const lblR = maxR + 17;
+     const lx = cx + lblR * Math.cos(theta);
+     const ly = cy - lblR * Math.sin(theta);
+     ctx.fillText(piLabel(angleFractions[i]), lx, ly);
+@@ -241,26 +287,39 @@ function drawGrid(ctx, size, isCpu) {
+   ctx.shadowBlur = 0;
+ 
+   // Radius labels (along theta=0 axis)
+-  ctx.fillStyle = '#3a5a68';
+-  ctx.font = '10px "Share Tech Mono"';
++  ctx.fillStyle = '#4f7584';
++  ctx.font = `${Math.round(10 * Math.max(1, u * 0.95))}px "Share Tech Mono"`;
+   ctx.textAlign = 'left';
+   for (let r = 1; r <= R_MAX; r++) {
+-    ctx.fillText(r.toString(), cx + (r / R_MAX) * maxR + 3, cy - 6);
++    ctx.fillText(r.toString(), cx + (r / R_MAX) * maxR + 4, cy - 8);
+   }
+ 
+-  // Intersection dots
+-  ctx.fillStyle = isCpu ? 'rgba(125, 200, 255, 0.25)' : 'rgba(93, 255, 196, 0.35)';
++  // Berths: every intersection is a visible slot a ship can occupy
+   for (let i = 0; i < N_ANG; i++) {
+     for (let r = 1; r <= R_MAX; r++) {
+       const { x, y } = polarToXY(i, r, size);
++      ctx.strokeStyle = `rgba(${tint}, 0.5)`;
++      ctx.lineWidth = 1;
++      ctx.beginPath();
++      ctx.arc(x, y, 3.6 * u, 0, Math.PI * 2);
++      ctx.stroke();
++      ctx.fillStyle = `rgba(${tint}, 0.55)`;
+       ctx.beginPath();
+-      ctx.arc(x, y, 2, 0, Math.PI * 2);
++      ctx.arc(x, y, 1.3 * u, 0, Math.PI * 2);
+       ctx.fill();
+     }
+   }
+-  // Origin dot
++  // Origin berth: bigger, with a crosshair
++  ctx.strokeStyle = `rgba(${tint}, 0.7)`;
++  ctx.lineWidth = 1.2;
+   ctx.beginPath();
+-  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
++  ctx.arc(cx, cy, 5.5 * u, 0, Math.PI * 2);
++  ctx.moveTo(cx - 9 * u, cy); ctx.lineTo(cx + 9 * u, cy);
++  ctx.moveTo(cx, cy - 9 * u); ctx.lineTo(cx, cy + 9 * u);
++  ctx.stroke();
++  ctx.fillStyle = `rgba(${tint}, 0.7)`;
++  ctx.beginPath();
++  ctx.arc(cx, cy, 1.6 * u, 0, Math.PI * 2);
+   ctx.fill();
+ }
+ 
+@@ -365,97 +424,199 @@ function drawPings(ctx, size) {
+   ctx.shadowBlur = 0;
+ }
+ 
+-// ---------- Ship drawing (player only) ----------
+-function sortShipAlongLine(ship) {
+-  if (ship.length < 2) return ship.slice();
+-  const nonOrigin = ship.filter(([_, r]) => r !== 0);
+-  const hasOrigin = nonOrigin.length < ship.length;
+-  if (nonOrigin.length === 0) return ship.slice();
+-  const radii = new Set(nonOrigin.map(([_, r]) => r));
+-  const angles = new Set(nonOrigin.map(([a]) => a));
+-  if (radii.size === 1) {
+-    const rVal = [...radii][0];
+-    let ais = nonOrigin.map(([a]) => a).sort((a, b) => a - b);
+-    if (ais.length > 1) {
+-      const gaps = ais.map((a, i) => {
+-        const next = ais[(i + 1) % ais.length];
+-        return ((next - a) % N_ANG + N_ANG) % N_ANG;
+-      });
+-      let maxGapIdx = 0;
+-      for (let i = 1; i < gaps.length; i++) {
+-        if (gaps[i] > gaps[maxGapIdx]) maxGapIdx = i;
++// ---------- Ship drawing ----------
++// A ship is an ordered list of berths (stern -> bow). Its hull follows the
++// ring (arc ships) or the spoke (radial ships) through those berths.
++
++// Centreline of a ship in canvas pixels, extended `pad` px past each end.
++// Returns { at(s) -> {x, y, ang}, total } where s is distance along the hull.
++function shipPath(cells, size, pad) {
++  const pts = cells.map(([ai, r]) => polarToXY(ai, r, size));
++  const out = [];
++  const STEPS = 14;
++  for (let k = 0; k < cells.length - 1; k++) {
++    const [a1, r1] = cells[k];
++    const [a2, r2] = cells[k + 1];
++    const P = pts[k], Q = pts[k + 1];
++    for (let s = 0; s < STEPS; s++) {
++      const f = s / STEPS;
++      if (r1 === r2 && r1 > 0) {
++        // Arc segment: sweep the shorter way around the ring
++        const th1 = specialAngles[a1];
++        let d = specialAngles[a2] - th1;
++        while (d > Math.PI) d -= 2 * Math.PI;
++        while (d <= -Math.PI) d += 2 * Math.PI;
++        const th = th1 + d * f;
++        const rr = (r1 / R_MAX) * P.maxR;
++        out.push({ x: P.cx + rr * Math.cos(th), y: P.cy - rr * Math.sin(th) });
++      } else {
++        // Radial segment (including through the origin)
++        out.push({ x: P.x + (Q.x - P.x) * f, y: P.y + (Q.y - P.y) * f });
+       }
+-      ais = ais.slice(maxGapIdx + 1).concat(ais.slice(0, maxGapIdx + 1));
+     }
+-    return ais.map(a => [a, rVal]);
+   }
+-  if (angles.size === 1) {
+-    const aVal = [...angles][0];
+-    const sorted = nonOrigin.slice().sort((a, b) => a[1] - b[1]);
+-    return hasOrigin ? [[aVal, 0], ...sorted] : sorted;
++  const last = pts[pts.length - 1];
++  out.push({ x: last.x, y: last.y });
++
++  const ext = (a, b) => {
++    const dx = a.x - b.x, dy = a.y - b.y;
++    const L = Math.hypot(dx, dy) || 1;
++    return { x: a.x + dx / L * pad, y: a.y + dy / L * pad };
++  };
++  out.unshift(ext(out[0], out[1]));
++  out.push(ext(out[out.length - 1], out[out.length - 2]));
++
++  const cum = [0];
++  for (let i = 1; i < out.length; i++) {
++    cum.push(cum[i - 1] + Math.hypot(out[i].x - out[i - 1].x, out[i].y - out[i - 1].y));
+   }
+-  return ship.slice();
++  const total = cum[cum.length - 1];
++  const at = (s) => {
++    s = Math.max(0, Math.min(total, s));
++    let i = 1;
++    while (i < cum.length - 1 && cum[i] < s) i++;
++    const seg = (cum[i] - cum[i - 1]) || 1;
++    const f = (s - cum[i - 1]) / seg;
++    const A = out[i - 1], B = out[i];
++    return {
++      x: A.x + (B.x - A.x) * f,
++      y: A.y + (B.y - A.y) * f,
++      ang: Math.atan2(B.y - A.y, B.x - A.x)
++    };
++  };
++  return { at, total };
+ }
+ 
+-function drawShip(ctx, size, ship, color) {
+-  if (ship.length === 0) return;
+-  const sorted = sortShipAlongLine(ship);
++// opts: alpha, glow, details (deck gear), markers (per-berth portholes), wreck
++function drawHull(ctx, size, cells, idx, color, opts = {}) {
++  if (!cells || cells.length < 2) return;
++  const u = uScale(size);
++  const alpha = opts.alpha ?? 1;
++  const wreck = !!opts.wreck;
++  const details = opts.details !== false && !wreck;
++  const markers = opts.markers !== false;
++  const glow = opts.glow ?? 12;
++  const W = (idx === 2 ? 12 : idx === 1 ? 10.5 : 9) * u;   // half-beam by ship class
++  const { at, total } = shipPath(cells, size, 12 * u);
++
++  // Hull profile: blunt transom at the stern, pointed bow
++  const prof = (t) => {
++    if (t > 0.70) return 1 - Math.pow((t - 0.70) / 0.30, 1.7);
++    if (t < 0.07) return 0.62 + 0.38 * Math.sin((t / 0.07) * Math.PI / 2);
++    return 1;
++  };
++  const outline = (t0, t1, scale, n) => {
++    const L = [], R = [];
++    for (let i = 0; i <= n; i++) {
++      const t = t0 + (t1 - t0) * (i / n);
++      const p = at(t * total);
++      const w = W * scale * prof(t);
++      const nx = Math.cos(p.ang + Math.PI / 2), ny = Math.sin(p.ang + Math.PI / 2);
++      L.push({ x: p.x + nx * w, y: p.y + ny * w });
++      R.push({ x: p.x - nx * w, y: p.y - ny * w });
++    }
++    return { L, R };
++  };
++  const trace = ({ L, R }) => {
++    ctx.beginPath();
++    ctx.moveTo(L[0].x, L[0].y);
++    for (const q of L) ctx.lineTo(q.x, q.y);
++    for (let i = R.length - 1; i >= 0; i--) ctx.lineTo(R[i].x, R[i].y);
++    ctx.closePath();
++  };
+ 
+-  ctx.strokeStyle = color;
+-  ctx.lineWidth = 3;
++  ctx.save();
++  ctx.globalAlpha = alpha;
++  ctx.lineJoin = 'round';
++
++  // Hull
++  const hull = outline(0, 1, 1, 44);
++  trace(hull);
++  ctx.fillStyle = wreck ? 'rgba(38, 16, 22, 0.8)' : hexToRgba(color, 0.2);
+   ctx.shadowColor = color;
+-  ctx.shadowBlur = 10;
++  ctx.shadowBlur = wreck ? 0 : glow;
++  ctx.fill();
++  ctx.lineWidth = 2 * u;
++  ctx.strokeStyle = color;
++  if (wreck) ctx.setLineDash([6 * u, 4 * u]);
++  ctx.stroke();
++  ctx.setLineDash([]);
++  ctx.shadowBlur = 0;
+ 
+-  for (let i = 0; i < sorted.length - 1; i++) {
+-    const [a1, r1] = sorted[i];
+-    const [a2, r2] = sorted[i + 1];
++  // Deck inset
++  if (!wreck) {
++    trace(outline(0.09, 0.88, 0.55, 30));
++    ctx.fillStyle = hexToRgba(color, 0.14);
++    ctx.fill();
++    ctx.lineWidth = 1;
++    ctx.strokeStyle = hexToRgba(color, 0.45);
++    ctx.stroke();
++  }
+ 
+-    if (r1 === 0 || r2 === 0) {
+-      // Radial segment through origin
+-      const p1 = polarToXY(a1, r1, size);
+-      const p2 = polarToXY(a2, r2, size);
++  // Deck gear that makes each class recognisable: dark shapes with a bright
++  // outline so they stand out against the lit hull
++  if (details) {
++    const local = (t, fn) => {
++      const p = at(t * total);
++      ctx.save();
++      ctx.translate(p.x, p.y);
++      ctx.rotate(p.ang);
++      fn();
++      ctx.restore();
++    };
++    const GEAR = 'rgba(3, 12, 16, 0.85)';
++    ctx.lineWidth = 1.4 * u;
++    ctx.strokeStyle = color;
++    const block = (w, h, dy = 0) => {
++      ctx.fillStyle = GEAR;
++      ctx.fillRect(-w / 2 * u, (dy - h / 2) * u, w * u, h * u);
++      ctx.strokeRect(-w / 2 * u, (dy - h / 2) * u, w * u, h * u);
++    };
++    const gun = (barrels) => {
+       ctx.beginPath();
+-      ctx.moveTo(p1.x, p1.y);
+-      ctx.lineTo(p2.x, p2.y);
++      for (const by of barrels) { ctx.moveTo(0, by * u); ctx.lineTo(9 * u, by * u); }
+       ctx.stroke();
+-    } else if (r1 === r2) {
+-      // Arc segment along circle of radius r1
+-      const { cx, cy, maxR } = polarToXY(a1, r1, size);
+-      const radius = (r1 / R_MAX) * maxR;
+-      // Determine sweep direction (shorter way)
+-      const t1 = specialAngles[a1];
+-      const t2 = specialAngles[a2];
+-      const fwd = ((a2 - a1) % N_ANG + N_ANG) % N_ANG;
+-      const bwd = ((a1 - a2) % N_ANG + N_ANG) % N_ANG;
++      ctx.fillStyle = GEAR;
++      ctx.beginPath(); ctx.arc(0, 0, 3.4 * u, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
++    };
++    if (idx === 0) {            // destroyer: bridge + single gun
++      local(0.40, () => block(9, 7));
++      local(0.70, () => gun([0]));
++    } else if (idx === 1) {     // battleship: twin turrets + central tower
++      local(0.28, () => gun([-1.5, 1.5]));
++      local(0.72, () => gun([-1.5, 1.5]));
++      local(0.50, () => block(11, 8));
++    } else {                    // carrier: flight-deck stripe + island on the beam
++      ctx.save();
++      ctx.setLineDash([6 * u, 4 * u]);
++      ctx.strokeStyle = color;
++      ctx.lineWidth = 1.6 * u;
+       ctx.beginPath();
+-      // Canvas angles are clockwise; our theta is CCW. Negate.
+-      if (fwd <= bwd) {
+-        ctx.arc(cx, cy, radius, -t1, -t2, true);  // anticlockwise=true in canvas terms
+-      } else {
+-        ctx.arc(cx, cy, radius, -t1, -t2, false);
++      for (let i = 0; i <= 24; i++) {
++        const p = at((0.13 + 0.74 * (i / 24)) * total);
++        if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+       }
+       ctx.stroke();
+-    } else {
+-      // Straight radial line (same angle)
+-      const p1 = polarToXY(a1, r1, size);
+-      const p2 = polarToXY(a2, r2, size);
+-      ctx.beginPath();
+-      ctx.moveTo(p1.x, p1.y);
+-      ctx.lineTo(p2.x, p2.y);
+-      ctx.stroke();
++      ctx.restore();
++      local(0.60, () => block(10, 5.5, W / u * 0.5));
+     }
+   }
+-  ctx.shadowBlur = 0;
+ 
+-  // Square nodes at each ship point
+-  ctx.fillStyle = color;
+-  ctx.strokeStyle = '#000';
+-  ctx.lineWidth = 1.5;
+-  for (const [ai, r] of sorted) {
+-    const { x, y } = polarToXY(ai, r, size);
+-    ctx.fillRect(x - 7, y - 7, 14, 14);
+-    ctx.strokeRect(x - 7, y - 7, 14, 14);
++  // One bright berth lamp per space the ship occupies, so its length is obvious
++  // (deck gear above is dark, so only the lit dots count as spaces)
++  if (markers) {
++    for (const [ai, r] of cells) {
++      const { x, y } = polarToXY(ai, r, size);
++      ctx.beginPath();
++      ctx.arc(x, y, 3.9 * u, 0, Math.PI * 2);
++      ctx.fillStyle = wreck ? 'rgba(255, 120, 130, 0.9)' : '#f2fffa';
++      ctx.fill();
++      ctx.lineWidth = 1.6 * u;
++      ctx.strokeStyle = 'rgba(3, 10, 14, 0.9)';
++      ctx.stroke();
++    }
+   }
++  ctx.restore();
+ }
+ 
+ // ---------- Hit/miss markers ----------
+@@ -501,14 +662,21 @@ function drawStar(ctx, cx, cy, spikes, outerR, innerR) {
+ }
+ 
+ // ---------- Redraw ----------
++function isSunk(ship, hits, idx) {
++  return ship.length === SHIP_SIZES[idx] && ship.every(c => hits.has(cellKey(c)));
++}
+ function redrawPlayer() {
+   const size = syncCanvas(playerCanvas, pctx);
+   if (size === 0) return;            // not laid out yet
+   pctx.clearRect(0, 0, size, size);
+   drawGrid(pctx, size, false);
+   state.shipsPlayer.forEach((ship, idx) => {
+-    drawShip(pctx, size, ship, SHIP_COLORS[idx]);
++    if (ship.length < 2) return;
++    const sunk = isSunk(ship, state.playerHits, idx);
++    drawHull(pctx, size, ship, idx, sunk ? '#ff4d5e' : SHIP_COLORS[idx],
++             sunk ? { wreck: true, alpha: 0.85 } : {});
+   });
++  if (state.phase === 'place') drawPlacementOverlay(pctx, size);
+   drawHitsMisses(pctx, size, state.playerHitPoints, state.playerMissPoints);
+ }
+ function redrawCpu() {
+@@ -516,6 +684,12 @@ function redrawCpu() {
+   if (size === 0) return;            // not laid out yet (e.g. hidden in placement)
+   cctx.clearRect(0, 0, size, size);
+   drawGrid(cctx, size, true);
++  // A hostile ship stays hidden until it is sunk, then its wreck is revealed
++  state.shipsCpu.forEach((ship, idx) => {
++    if (isSunk(ship, state.cpuHits, idx)) {
++      drawHull(cctx, size, ship, idx, '#ff4d5e', { wreck: true, alpha: 0.8 });
++    }
++  });
+   drawSonarSweep(cctx, size);
+   drawHitsMisses(cctx, size, state.cpuHitPoints, state.cpuMissPoints);
+   drawPings(cctx, size);
+@@ -539,6 +713,7 @@ function animate(now) {
+   state.sonarAngleDeg = ((raw % 360) + 360) % 360;
+   updatePings(dt);
+   redrawCpu();
++  if (state.phase === 'place') redrawPlayer();   // pulsing beacons + hover ghosts
+   requestAnimationFrame(animate);
+ }
+ requestAnimationFrame(animate);
+@@ -574,12 +749,19 @@ function renderFleets() {
+   playerEl.innerHTML = '';
+   cpuEl.innerHTML = '';
+ 
++  const placing = state.phase === 'place';
+   for (let i = 0; i < NUM_SHIPS; i++) {
+     const ship = state.shipsPlayer[i];
+     const sunk = ship.length === SHIP_SIZES[i] &&
+       ship.every(c => state.playerHits.has(cellKey(c)));
+     const div = document.createElement('div');
+-    div.className = `fleet-item ${sunk ? 'sunk' : 'alive'}`;
++    if (placing) {
++      const st = i < state.currentShip ? 'placed' : (i === state.currentShip ? 'active' : 'pending');
++      div.className = `fleet-item ${st}`;
++      div.style.setProperty('--ship-color', SHIP_COLORS[i]);
++    } else {
++      div.className = `fleet-item ${sunk ? 'sunk' : 'alive'}`;
++    }
+     div.innerHTML = `<span class="fleet-name">${SHIP_NAMES[i]}</span><span class="fleet-size">${SHIP_SIZES[i]} PTS</span>`;
+     playerEl.appendChild(div);
+   }
+@@ -592,89 +774,403 @@ function renderFleets() {
+   }
+ }
+ 
+-// ---------- Placement (click on player canvas) ----------
+-function clickToPolar(canvas, evt) {
+-  const rect = canvas.getBoundingClientRect();
+-  const size = canvas.clientWidth;
+-  const x = evt.clientX - rect.left;
+-  const y = evt.clientY - rect.top;
+-  const cx = size / 2, cy = size / 2;
+-  const maxR = (size / 2) - 30;
+-  const dx = x - cx, dy = cy - y;  // flip y so up is positive (math convention)
+-  const r_raw = Math.sqrt(dx * dx + dy * dy) / maxR * R_MAX;
+-  let theta = Math.atan2(dy, dx);
+-  if (theta < 0) theta += 2 * Math.PI;
+-  // Snap to nearest angle
+-  let bestI = 0, bestDiff = Infinity;
+-  for (let i = 0; i < N_ANG; i++) {
+-    const a = specialAngles[i];
+-    let d = Math.abs(a - theta);
+-    if (d > Math.PI) d = 2 * Math.PI - d;
+-    if (d < bestDiff) { bestDiff = d; bestI = i; }
++// ---------- Placement ----------
++// Two steps, no guessing:
++//   1. Click a berth where the ship starts.
++//   2. Click (or drag to) one of the glowing berths to aim it.
++// Every legal ship is a straight line along a ring, or along a spoke (a spoke
++// may run through the origin and out the opposite bearing).
++
++const HALF_TURN = N_ANG / 2;   // index offset that adds pi to an angle
++const modAng = (n) => ((n % N_ANG) + N_ANG) % N_ANG;
++const sameCell = (p, q) => cellKey(p) === cellKey(q);
++
++function usedKeysPlayer() {
++  return new Set(state.shipsPlayer.flat().map(cellKey));
++}
++
++// All legal ships of `size` that start at `anchor`, as ordered stern->bow lists
++function candidatesFrom(anchor, size) {
++  const used = usedKeysPlayer();
++  const [ai, r] = anchor;
++  const out = [];
++  const tryPush = (cells) => {
++    if (cells.length !== size) return;
++    const keys = cells.map(cellKey);
++    if (new Set(keys).size !== size) return;
++    if (keys.some(k => used.has(k))) return;
++    out.push(cells);
++  };
++
++  if (r === 0) {
++    // From the origin a ship can run out along any of the 16 bearings
++    for (let a = 0; a < N_ANG; a++) {
++      const cells = [[0, 0]];
++      for (let k = 1; k < size && k <= R_MAX; k++) cells.push([a, k]);
++      tryPush(cells);
++    }
++    return out;
++  }
++  // Along the ring, both directions
++  for (const dir of [1, -1]) {
++    const cells = [];
++    for (let k = 0; k < size; k++) cells.push([modAng(ai + dir * k), r]);
++    tryPush(cells);
+   }
+-  const r = Math.max(R_MIN, Math.min(R_MAX, Math.round(r_raw)));
+-  return [bestI, r];
++  // Outward along the spoke
++  {
++    const cells = [];
++    for (let k = 0; k < size && r + k <= R_MAX; k++) cells.push([ai, r + k]);
++    tryPush(cells);
++  }
++  // Inward along the spoke, through the origin and out the opposite bearing
++  {
++    const cells = [];
++    for (let k = 0; k < size; k++) {
++      const rr = r - k;
++      if (rr >= 1) cells.push([ai, rr]);
++      else if (rr === 0) cells.push([0, 0]);
++      else if (-rr <= R_MAX) cells.push([modAng(ai + HALF_TURN), -rr]);
++      else break;
++    }
++    tryPush(cells);
++  }
++  return out;
+ }
+ 
+-function alreadyUsedPlayer(point) {
+-  const k = cellKey(point);
+-  return state.shipsPlayer.some(s => s.some(c => cellKey(c) === k));
++// The candidate (if any) that a given berth belongs to
++function candidateFor(cell, cands) {
++  return cands.find(c => c.slice(1).some(x => sameCell(x, cell))) || null;
+ }
+ 
+-playerCanvas.addEventListener('click', (evt) => {
+-  if (state.phase !== 'place') return;
+-  if (state.currentShip >= NUM_SHIPS) return;
+-  const point = clickToPolar(playerCanvas, evt);
+-  const idx = state.currentShip;
+-  const ship = state.shipsPlayer[idx];
+-  const needed = SHIP_SIZES[idx];
++// Every berth on the board, for hit-testing
++const ALL_BERTHS = [[0, 0]];
++for (let ai = 0; ai < N_ANG; ai++) {
++  for (let r = 1; r <= R_MAX; r++) ALL_BERTHS.push([ai, r]);
++}
+ 
+-  if (alreadyUsedPlayer(point)) {
+-    setStatus('THAT CELL IS ALREADY USED');
+-    return;
++// Nearest berth to the pointer, or null if the pointer is out in open water
++function berthAt(evt) {
++  const rect = playerCanvas.getBoundingClientRect();
++  const size = playerCanvas.clientWidth;
++  if (!size) return null;
++  const x = evt.clientX - rect.left, y = evt.clientY - rect.top;
++  let best = null, bestD = Infinity;
++  for (const cell of ALL_BERTHS) {
++    const p = polarToXY(cell[0], cell[1], size);
++    const d = Math.hypot(p.x - x, p.y - y);
++    if (d < bestD) { bestD = d; best = cell; }
+   }
+-  if (ship.length > 0) {
+-    const endpoints = ship.length === 1 ? [ship[0]] : [ship[0], ship[ship.length - 1]];
+-    if (!endpoints.some(ep => isAdjacent(ep, point))) {
+-      setStatus('NOT ADJACENT TO EITHER END OF THE SHIP');
+-      return;
+-    }
++  return bestD <= 34 * uScale(size) ? best : null;
++}
++
++function cellLabel(cell) {
++  return cell[1] === 0
++    ? 'ORIGIN  r = 0'
++    : `θ = ${piLabel(angleFractions[cell[0]])}   r = ${cell[1]}`;
++}
++
++// ----- Ship icon for the banner -----
++function shipIconSVG(idx, color) {
++  const n = SHIP_SIZES[idx];
++  const w = 44 + n * 26;
++  const bowBase = w - 30;
++  const portholes = Array.from({ length: n }, (_, i) =>
++    `<circle cx="${22 + i * 26}" cy="18" r="4.6" fill="#03080b" stroke="${color}" stroke-width="1.6"/>`
++  ).join('');
++  return `<svg class="pb-icon" viewBox="0 0 ${w} 36" aria-hidden="true">` +
++    `<path d="M4 6 H${bowBase} L${w - 4} 18 L${bowBase} 30 H4 Z" fill="${hexToRgba(color, 0.2)}" ` +
++    `stroke="${color}" stroke-width="2" stroke-linejoin="round"/>${portholes}</svg>`;
++}
++
++// ----- Banner / status text -----
++function placeStatusLine() {
++  const i = Math.min(state.currentShip, NUM_SHIPS - 1);
++  return state.place.anchor
++    ? `STEP 2 — CLICK A GLOWING SPOT TO AIM YOUR ${SHIP_NAMES[i]}.`
++    : `PLACE YOUR ${SHIP_NAMES[i]} (${SHIP_SIZES[i]} SPACES). CLICK A START SPOT ON THE FRIENDLY GRID.`;
++}
++
++function updatePlaceBanner(flash) {
++  const banner = document.getElementById('place-banner');
++  if (!banner) return;
++  const idx = Math.min(state.currentShip, NUM_SHIPS - 1);
++  const color = SHIP_COLORS[idx];
++  const name = SHIP_NAMES[idx].toLowerCase();
++  banner.style.setProperty('--ship-color', color);
++  banner.style.setProperty('--ship-glow', hexToRgba(color, 0.5));
++  document.getElementById('pb-kicker').textContent = `DEPLOYMENT // SHIP ${idx + 1} OF ${NUM_SHIPS}`;
++  document.getElementById('pb-ship').textContent = SHIP_NAMES[idx];
++  document.getElementById('pb-size').innerHTML =
++    shipIconSVG(idx, color) + `<span class="pb-spaces">${SHIP_SIZES[idx]} SPACES</span>`;
++
++  const hint = document.getElementById('pb-hint');
++  if (state.place.msg) {
++    hint.className = 'pb-hint warn';
++    hint.textContent = state.place.msg;
++  } else if (state.place.anchor) {
++    hint.className = 'pb-hint';
++    hint.innerHTML = `<b>STEP 2</b> Click a glowing spot to aim your ${name} <span class="pb-esc">(ESC cancels)</span>`;
++  } else {
++    hint.className = 'pb-hint';
++    hint.innerHTML = `<b>STEP 1</b> Click a spot on the grid to start your ${name}`;
+   }
+-  // Straight-line lock
+-  const nonOrigin = ship.filter(([_, r]) => r !== 0);
+-  if (nonOrigin.length >= 2) {
+-    const radii = new Set(nonOrigin.map(([_, r]) => r));
+-    const angles = new Set(nonOrigin.map(([a]) => a));
+-    const [newAi, newR] = point;
+-    if (radii.size === 1 && newR !== 0 && newR !== [...radii][0]) {
+-      setStatus(`${SHIP_NAMES[idx]} LOCKED ON RADIUS ${[...radii][0]}`);
+-      return;
+-    }
+-    if (angles.size === 1 && newR !== 0 && newAi !== [...angles][0]) {
+-      setStatus(`${SHIP_NAMES[idx]} LOCKED ON ANGLE ${piLabel(angleFractions[[...angles][0]])}`);
+-      return;
+-    }
++  document.getElementById('pb-pips').innerHTML = SHIP_NAMES.map((n, i) =>
++    `<span class="pip ${i < state.currentShip ? 'done' : (i === state.currentShip ? 'active' : '')}" title="${n}"></span>`
++  ).join('');
++
++  document.getElementById('undo-btn').disabled = state.currentShip === 0;
++  document.getElementById('reset-btn').disabled = state.currentShip === 0 && !state.place.anchor;
++
++  if (flash) {
++    banner.classList.remove('flash');
++    void banner.offsetWidth;          // restart the CSS animation
++    banner.classList.add('flash');
+   }
++}
+ 
+-  ship.push(point);
+-  const [ai, r] = point;
+-  const aLbl = r !== 0 ? piLabel(angleFractions[ai]) : '—';
+-  setStatus(`${SHIP_NAMES[idx]} ${ship.length}/${needed}: θ=${aLbl}, r=${r}`);
++function flashHint(msg) {
++  state.place.msg = msg;
++  clearTimeout(state.place.msgTimer);
++  state.place.msgTimer = setTimeout(() => {
++    state.place.msg = '';
++    updatePlaceBanner();
++  }, 2000);
++  setStatus(msg);
++  updatePlaceBanner();
++}
+ 
+-  if (ship.length === needed) {
+-    state.currentShip++;
+-    if (state.currentShip === NUM_SHIPS) {
+-      generateCpuShips();
+-      startGuessingPhase();
++// ----- Placement overlay (ghost hulls, beacons, hover) -----
++function drawPlacementOverlay(ctx, size) {
++  const idx = state.currentShip;
++  if (idx >= NUM_SHIPS) return;
++  const u = uScale(size);
++  const color = SHIP_COLORS[idx];
++  const sz = SHIP_SIZES[idx];
++  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 1000 * 5);
++  const pl = state.place;
++
++  const ring = (cell, rad, col, a, lw) => {
++    const { x, y } = polarToXY(cell[0], cell[1], size);
++    ctx.strokeStyle = hexToRgba(col, a);
++    ctx.lineWidth = lw * u;
++    ctx.beginPath();
++    ctx.arc(x, y, rad * u, 0, Math.PI * 2);
++    ctx.stroke();
++  };
++  const cross = (cell, col) => {
++    const { x, y } = polarToXY(cell[0], cell[1], size);
++    ctx.strokeStyle = hexToRgba(col, 0.95);
++    ctx.lineWidth = 2.2 * u;
++    ctx.beginPath();
++    ctx.moveTo(x - 6 * u, y - 6 * u); ctx.lineTo(x + 6 * u, y + 6 * u);
++    ctx.moveTo(x + 6 * u, y - 6 * u); ctx.lineTo(x - 6 * u, y + 6 * u);
++    ctx.stroke();
++  };
++  const ghost = (c, a) => drawHull(ctx, size, c, idx, color,
++    { alpha: a, details: false, markers: false, glow: 0 });
++
++  if (pl.anchor) {
++    const cands = candidatesFrom(pl.anchor, sz);
++    const hot = pl.hover ? candidateFor(pl.hover, cands) : null;
++    cands.forEach(c => { if (c !== hot) ghost(c, 0.3); });
++    if (hot) drawHull(ctx, size, hot, idx, color, { alpha: 0.95, glow: 18 });
++    // Beacon on the far end of every option
++    cands.forEach(c => {
++      ring(c[c.length - 1], 9 + 4 * pulse, color, c === hot ? 1 : 0.5 + 0.4 * pulse, 2.2);
++    });
++    // Anchor
++    ring(pl.anchor, 8 + 2 * pulse, '#ffffff', 0.95, 2.4);
++    ring(pl.anchor, 14, color, 0.6, 1.5);
++  } else if (pl.hover) {
++    if (usedKeysPlayer().has(cellKey(pl.hover))) {
++      ring(pl.hover, 9, '#ff4d5e', 0.9, 2);
++      cross(pl.hover, '#ff4d5e');
+     } else {
+-      const ni = state.currentShip;
+-      setStatus(`${SHIP_NAMES[idx]} COMPLETE. NOW PLACING ${SHIP_NAMES[ni]} (${SHIP_SIZES[ni]} PTS)`);
++      const cands = candidatesFrom(pl.hover, sz);
++      if (cands.length === 0) {
++        ring(pl.hover, 9, '#ff4d5e', 0.9, 2);
++        cross(pl.hover, '#ff4d5e');
++      } else {
++        cands.forEach(c => ghost(c, 0.22));
++        ring(pl.hover, 9 + 2 * pulse, color, 1, 2.4);
++      }
+     }
+   }
++}
++
++// ----- Actions -----
++function cancelAnchor() {
++  if (!state.place.anchor) return;
++  state.place.anchor = null;
++  state.place.dragging = false;
++  setStatus(placeStatusLine());
++  updatePlaceBanner();
++}
++
++function startFrom(cell, evt) {
++  const idx = state.currentShip;
++  if (usedKeysPlayer().has(cellKey(cell))) {
++    flashHint('THAT SPOT IS ALREADY TAKEN');
++    return;
++  }
++  if (candidatesFrom(cell, SHIP_SIZES[idx]).length === 0) {
++    flashHint(`NO ROOM FOR A ${SHIP_NAMES[idx]} STARTING THERE — TRY ANOTHER SPOT`);
++    return;
++  }
++  state.place.anchor = cell.slice();
++  state.place.dragging = true;
++  if (evt && evt.pointerId !== undefined && playerCanvas.setPointerCapture) {
++    try { playerCanvas.setPointerCapture(evt.pointerId); } catch (e) { /* ignore */ }
++  }
++  setStatus(placeStatusLine());
++  updatePlaceBanner();
++}
++
++function commitShip(cells) {
++  const idx = state.currentShip;
++  state.shipsPlayer[idx] = cells.map(c => c.slice());   // stern -> bow
++  state.currentShip++;
++  state.place.anchor = null;
++  state.place.dragging = false;
++  if (state.currentShip >= NUM_SHIPS) {
++    finishDeployment();
++  } else {
++    const ni = state.currentShip;
++    setStatus(`${SHIP_NAMES[idx]} DEPLOYED. NOW PLACE YOUR ${SHIP_NAMES[ni]} (${SHIP_SIZES[ni]} SPACES).`);
++    updatePlaceBanner(true);
++  }
++  renderFleets();
+   redrawPlayer();
++}
++
++function finishDeployment() {
++  generateCpuShips();
++  startGuessingPhase();
++  showBanner('FLEET DEPLOYED', 'sunk-hostile', 1400);
++}
++
++function undoShip() {
++  if (state.phase !== 'place' || state.currentShip === 0) return;
++  state.currentShip--;
++  state.shipsPlayer[state.currentShip] = [];
++  state.place.anchor = null;
++  state.place.dragging = false;
++  setStatus(`UNDONE. PLACE YOUR ${SHIP_NAMES[state.currentShip]} AGAIN.`);
++  updatePlaceBanner(true);
+   renderFleets();
++  redrawPlayer();
++}
++
++function resetPlacement() {
++  if (state.phase !== 'place') return;
++  state.shipsPlayer = [[], [], []];
++  state.currentShip = 0;
++  state.place.anchor = null;
++  state.place.dragging = false;
++  setStatus(placeStatusLine());
++  updatePlaceBanner(true);
++  renderFleets();
++  redrawPlayer();
++}
++
++// Drop whatever hasn't been placed yet at random, then start the battle
++function autoDeploy() {
++  if (state.phase !== 'place') return;
++  for (let attempt = 0; attempt < 500; attempt++) {
++    const used = new Set(state.shipsPlayer.flat().map(cellKey));
++    const placed = [];
++    let ok = true;
++    for (let i = state.currentShip; i < NUM_SHIPS; i++) {
++      const s = placeOne(SHIP_SIZES[i], used);
++      if (!s) { ok = false; break; }
++      placed.push(s);
++      s.forEach(c => used.add(cellKey(c)));
++    }
++    if (ok) {
++      placed.forEach((s, k) => { state.shipsPlayer[state.currentShip + k] = s; });
++      state.currentShip = NUM_SHIPS;
++      break;
++    }
++  }
++  if (state.currentShip >= NUM_SHIPS) {
++    state.place.anchor = null;
++    renderFleets();
++    finishDeployment();
++  }
++}
++
++// ----- Input -----
++function cursorFor(cell) {
++  if (!cell) return 'crosshair';
++  if (state.place.anchor) {
++    const cands = candidatesFrom(state.place.anchor, SHIP_SIZES[state.currentShip]);
++    if (candidateFor(cell, cands)) return 'pointer';
++  }
++  return usedKeysPlayer().has(cellKey(cell)) ? 'not-allowed' : 'pointer';
++}
++
++playerCanvas.addEventListener('pointermove', (evt) => {
++  if (state.phase !== 'place') return;
++  const cell = berthAt(evt);
++  state.place.hover = cell;
++  document.getElementById('pb-readout').textContent = cell ? `CURSOR  ${cellLabel(cell)}` : 'CURSOR  —';
++  playerCanvas.style.cursor = cursorFor(cell);
++});
++playerCanvas.addEventListener('pointerleave', () => {
++  state.place.hover = null;
++  const ro = document.getElementById('pb-readout');
++  if (ro) ro.textContent = 'CURSOR  —';
++});
++
++playerCanvas.addEventListener('pointerdown', (evt) => {
++  if (state.phase !== 'place' || state.currentShip >= NUM_SHIPS) return;
++  if (evt.button !== undefined && evt.button !== 0) return;
++  const pl = state.place;
++  pl.dragging = false;
++  const cell = berthAt(evt);
++  pl.hover = cell;
++  if (!cell) { cancelAnchor(); return; }          // click in open water cancels
++  if (pl.anchor) {
++    const hit = candidateFor(cell, candidatesFrom(pl.anchor, SHIP_SIZES[state.currentShip]));
++    if (hit) { commitShip(hit); return; }
++    if (sameCell(cell, pl.anchor)) { cancelAnchor(); return; }
++  }
++  startFrom(cell, evt);
+ });
+ 
++// Drag support: press on the start, release on a glowing spot
++playerCanvas.addEventListener('pointerup', (evt) => {
++  const pl = state.place;
++  if (!pl.dragging) return;
++  pl.dragging = false;
++  if (state.phase !== 'place' || !pl.anchor) return;
++  const cell = berthAt(evt);
++  if (!cell || sameCell(cell, pl.anchor)) return;
++  const hit = candidateFor(cell, candidatesFrom(pl.anchor, SHIP_SIZES[state.currentShip]));
++  if (hit) commitShip(hit);
++});
++playerCanvas.addEventListener('pointercancel', () => { state.place.dragging = false; });
++
++playerCanvas.addEventListener('contextmenu', (evt) => {
++  if (state.phase !== 'place') return;
++  evt.preventDefault();
++  cancelAnchor();
++});
++
++document.addEventListener('keydown', (evt) => {
++  if (state.phase !== 'place') return;
++  if (evt.key === 'Escape') cancelAnchor();
++  if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'z') {
++    evt.preventDefault();
++    undoShip();
++  }
++});
++
++document.getElementById('undo-btn').addEventListener('click', undoShip);
++document.getElementById('reset-btn').addEventListener('click', resetPlacement);
++document.getElementById('auto-btn').addEventListener('click', autoDeploy);
++
+ // ---------- CPU ships ----------
+ function generateCpuShips() {
+   state.shipsCpu = randomPlaceShips(SHIP_SIZES);
+@@ -683,6 +1179,9 @@ function generateCpuShips() {
+ // ---------- Guessing phase ----------
+ function startGuessingPhase() {
+   state.phase = 'guess';
++  state.place.anchor = null;
++  state.place.hover = null;
++  state.place.dragging = false;
+   document.body.classList.remove('phase-place');
+   document.getElementById('controls').hidden = false;
+   buildRadiusButtons();
+@@ -984,7 +1483,12 @@ function resetGame() {
+   document.getElementById('controls').hidden = true;
+   document.body.classList.add('phase-place');
+ 
+-  setStatus(`DEPLOY YOUR FLEET — PLACE THE ${SHIP_NAMES[0]} (${SHIP_SIZES[0]} POINTS). CLICK THE FRIENDLY GRID TO BEGIN.`);
++  state.place.anchor = null;
++  state.place.hover = null;
++  state.place.dragging = false;
++  state.place.msg = '';
++  setStatus(placeStatusLine());
++  updatePlaceBanner(true);
+   renderFleets();
+   // redrawCpu()/redrawPlayer() self-sync the canvas size each call, so the
+   // layout change is handled automatically.
+@@ -992,6 +1496,7 @@ function resetGame() {
+ }
+ 
+ // ---------- Init ----------
+-setStatus(`DEPLOY YOUR FLEET — PLACE THE ${SHIP_NAMES[0]} (${SHIP_SIZES[0]} POINTS). CLICK THE FRIENDLY GRID TO BEGIN.`);
++setStatus(placeStatusLine());
++updatePlaceBanner(true);
+ renderFleets();
+ redrawAll();
+diff --git a/index.html b/index.html
+index 9907e05..6a46d82 100644
+--- a/index.html
++++ b/index.html
+@@ -21,7 +21,7 @@
+   </div>
+   <h1 class="title">
+     <span class="title-main">POLAR BATTLESHIP</span>
+-    <span class="title-sub">// SONAR COMMAND v1.1</span>
++    <span class="title-sub">// SONAR COMMAND v1.2</span>
+   </h1>
+   <div class="hud-cluster right">
+     <span class="hud-tag">TIME</span>
+@@ -29,24 +29,31 @@
+   </div>
+ </header>
+ 
++<section class="place-banner" id="place-banner" aria-live="polite">
++  <div class="pb-top">
++    <span class="pb-kicker" id="pb-kicker">DEPLOYMENT // SHIP 1 OF 3</span>
++    <span class="pb-pips" id="pb-pips"></span>
++  </div>
++  <h2 class="pb-title">PLACE YOUR <span id="pb-ship">DESTROYER</span></h2>
++  <div class="pb-row">
++    <div class="pb-size" id="pb-size"></div>
++    <div class="pb-hint" id="pb-hint"></div>
++  </div>
++</section>
++
+ <main class="boards">
+   <section class="board-card" id="player-card">
+     <div class="card-header">
+       <span class="card-label">FRIENDLY</span>
++      <span class="card-readout" id="pb-readout">CURSOR  &mdash;</span>
+       <span class="card-id">ALPHA-01</span>
+     </div>
+-    <div class="deploy-orders" id="deploy-orders">
+-      <span class="deploy-title">// DEPLOYMENT ORDERS</span>
+-      <p class="deploy-line">Position your fleet on the friendly grid before engaging the enemy.</p>
+-      <ol class="deploy-steps">
+-        <li>Click grid intersections to lay each ship, point by point.</li>
+-        <li>Every point must touch an end of the current ship &mdash; along an arc or a radius.</li>
+-        <li>Each ship locks straight once two points are set; no bends.</li>
+-        <li>DESTROYER (2) &rarr; BATTLESHIP (3) &rarr; CARRIER (4), in order.</li>
+-      </ol>
+-      <span class="deploy-foot">Hostile sector stays dark until your fleet is deployed.</span>
+-    </div>
+     <canvas id="player-canvas" width="560" height="560"></canvas>
++    <div class="place-tools" id="place-tools">
++      <button class="tool-btn" id="undo-btn" type="button">&#8630; UNDO SHIP</button>
++      <button class="tool-btn" id="reset-btn" type="button">RESET</button>
++      <button class="tool-btn alt" id="auto-btn" type="button">AUTO-DEPLOY</button>
++    </div>
+     <div class="card-footer">
+       <span class="fleet-tag">FLEET STATUS</span>
+       <div class="fleet-list" id="player-fleet"></div>
+diff --git a/style.css b/style.css
+index 2f8dddb..ede0330 100644
+--- a/style.css
++++ b/style.css
+@@ -429,75 +429,204 @@ canvas {
+ }
+ 
+ /* ===== PHASE 1: PLACEMENT ===== */
+-/* During placement only the friendly board is shown, centered. */
++/* During placement only the friendly board is shown, centred and enlarged. */
+ .phase-place .boards {
+   grid-template-columns: 1fr;
+-  max-width: 560px;
++  max-width: 760px;
+ }
+-.phase-place #cpu-card {
+-  display: none;
+-}
+-
+-/* Deployment-orders panel: visible only in the placement phase. */
+-.deploy-orders {
++.phase-place #cpu-card { display: none; }
++.phase-place #player-canvas {
++  /* As big as fits under the banner (capped), never too small to click */
++  width: min(100%, max(420px, calc(100vh - 290px)), 720px);
++  margin: 0 auto;
++  touch-action: none;
++}
++
++/* Wide screens: tools and fleet sit beside the board so it can use the height */
++@media (min-width: 900px) {
++  .phase-place .boards { max-width: 1040px; }
++  .phase-place #player-card {
++    display: grid;
++    grid-template-columns: minmax(0, 1fr) 250px;
++    grid-template-rows: auto auto 1fr;
++    grid-template-areas:
++      "head  head"
++      "board tools"
++      "board fleet";
++    column-gap: 16px;
++  }
++  .phase-place #player-card .card-header { grid-area: head; }
++  .phase-place #player-card canvas { grid-area: board; justify-self: center; }
++  .phase-place #player-card .place-tools {
++    grid-area: tools;
++    flex-direction: column;
++    align-self: start;
++    margin-top: 0;
++  }
++  .phase-place #player-card .card-footer { grid-area: fleet; align-self: start; margin-top: 14px; }
++  .phase-place #player-card .fleet-list { flex-direction: column; }
++  .phase-place #player-card .fleet-item { padding: 8px 10px; font-size: 10px; }
++  .phase-place #player-card .fleet-item::after { top: 8px !important; right: 8px !important; font-size: 8px !important; }
++}
++
++/* --- Big "PLACE YOUR <ship>" banner --- */
++.place-banner {
+   display: none;
+-  border: 1px solid var(--phosphor-dim);
+-  background: linear-gradient(to bottom, #0a1c20, #06141a);
+-  padding: 9px 11px 10px;
+-  margin-bottom: 7px;
++  --ship-color: #5dffc4;
++  --ship-glow: rgba(93, 255, 196, 0.5);
++  max-width: 1000px;
++  margin: 14px auto 0;
++  padding: 10px 22px 12px;
++  text-align: center;
++  position: relative;
++  background: linear-gradient(to bottom, rgba(10, 28, 32, 0.96), rgba(6, 16, 22, 0.96));
++  border: 2px solid var(--ship-color);
++  box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.55), inset 0 0 22px var(--ship-glow);
++  clip-path: polygon(
++    16px 0, 100% 0, 100% calc(100% - 16px),
++    calc(100% - 16px) 100%, 0 100%, 0 16px
++  );
+ }
+-.phase-place .deploy-orders {
+-  display: block;
++.phase-place .place-banner { display: block; }
++.place-banner.flash { animation: bannerFlash 0.55s ease-out; }
++@keyframes bannerFlash {
++  0%   { transform: scale(0.97); filter: brightness(2); }
++  100% { transform: scale(1);    filter: brightness(1); }
+ }
+-.deploy-title {
+-  display: block;
+-  font-size: 9px;
+-  letter-spacing: 0.3em;
+-  color: var(--phosphor);
+-  text-shadow: 0 0 6px var(--phosphor-glow);
+-  font-weight: bold;
+-  margin-bottom: 5px;
++
++.pb-top {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  margin-bottom: 2px;
+ }
+-.deploy-line {
++.pb-kicker {
+   font-size: 10px;
+-  letter-spacing: 0.04em;
+-  color: var(--text-main);
+-  line-height: 1.45;
+-  margin-bottom: 5px;
+-}
+-.deploy-steps {
+-  list-style: none;
+-  counter-reset: deploy;
+-  display: flex;
+-  flex-direction: column;
+-  gap: 3px;
+-  margin-bottom: 5px;
++  letter-spacing: 0.35em;
++  color: var(--text-mute);
+ }
+-.deploy-steps li {
+-  counter-increment: deploy;
+-  position: relative;
+-  padding-left: 20px;
+-  font-size: 9.5px;
+-  letter-spacing: 0.03em;
++.pb-title {
++  font-family: 'Orbitron', sans-serif;
++  font-weight: 900;
++  font-size: clamp(24px, 4.9vw, 48px);
++  line-height: 1.08;
++  letter-spacing: 0.09em;
+   color: var(--text-main);
+-  line-height: 1.4;
++  text-shadow: 0 0 16px var(--ship-glow);
++  text-wrap: balance;
+ }
+-.deploy-steps li::before {
+-  content: counter(deploy);
+-  position: absolute;
+-  left: 0; top: 0;
+-  width: 14px; height: 14px;
+-  border: 1px solid var(--phosphor-dim);
+-  color: var(--phosphor);
+-  font-size: 8px;
++.pb-title #pb-ship {
++  color: var(--ship-color);
++  text-shadow: 0 0 10px var(--ship-color), 0 0 32px var(--ship-glow);
++}
++.pb-row {
+   display: flex;
+-  align-items: center;
+   justify-content: center;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 8px 26px;
++  margin-top: 8px;
+ }
+-.deploy-foot {
+-  display: block;
+-  font-size: 8px;
+-  letter-spacing: 0.18em;
+-  color: var(--text-mute);
++.pb-size { display: flex; align-items: center; gap: 12px; }
++.pb-icon { height: 28px; width: auto; filter: drop-shadow(0 0 6px var(--ship-glow)); }
++.pb-spaces {
++  font-family: 'Orbitron', sans-serif;
++  font-size: 13px;
++  font-weight: 700;
++  letter-spacing: 0.25em;
++  color: var(--ship-color);
++}
++.pb-hint {
++  font-size: 13px;
++  letter-spacing: 0.08em;
++  color: var(--text-main);
+   text-transform: uppercase;
+ }
++.pb-hint b {
++  display: inline-block;
++  margin-right: 8px;
++  padding: 1px 7px;
++  border: 1px solid var(--ship-color);
++  color: var(--ship-color);
++  font-size: 11px;
++  letter-spacing: 0.2em;
++}
++.pb-hint .pb-esc { color: var(--text-mute); font-size: 10px; margin-left: 4px; }
++.pb-hint.warn { color: var(--red-alert); text-shadow: 0 0 8px var(--red-glow); }
++.pb-pips { display: flex; gap: 8px; }
++.pip {
++  width: 26px; height: 8px;
++  border: 1px solid var(--bg-card-edge);
++  background: transparent;
++  transform: skewX(-20deg);
++}
++.pip.active { border-color: var(--ship-color); box-shadow: 0 0 8px var(--ship-glow); }
++.pip.done { background: var(--phosphor-dim); border-color: var(--phosphor); }
++
++/* live (theta, r) readout in the board header */
++.card-readout { display: none; white-space: pre; color: var(--phosphor); letter-spacing: 0.15em; }
++.phase-place .card-readout { display: inline; }
++
++/* --- Placement toolbar --- */
++.place-tools { display: none; gap: 8px; margin-top: 8px; }
++.phase-place .place-tools { display: flex; }
++.tool-btn {
++  flex: 1;
++  background: var(--bg-card);
++  border: 1px solid var(--bg-card-edge);
++  color: var(--text-main);
++  font-family: 'Share Tech Mono', monospace;
++  font-size: 11px;
++  letter-spacing: 0.2em;
++  padding: 9px 8px;
++  cursor: pointer;
++  transition: all 0.15s;
++}
++.tool-btn:hover:not(:disabled) { border-color: var(--phosphor-dim); color: var(--phosphor); }
++.tool-btn.alt { border-color: var(--amber-dim); color: var(--amber); }
++.tool-btn.alt:hover:not(:disabled) { border-color: var(--amber); box-shadow: 0 0 10px rgba(255, 184, 77, 0.3); }
++.tool-btn:disabled { opacity: 0.35; cursor: default; }
++
++/* --- Fleet tray states during deployment --- */
++.fleet-item.placed { color: var(--phosphor); border-color: var(--phosphor-dim); }
++.fleet-item.placed::after {
++  content: 'READY';
++  position: absolute; right: 4px; top: 4px;
++  font-size: 7px; color: var(--phosphor);
++}
++.fleet-item.active {
++  color: var(--ship-color, var(--phosphor));
++  border-color: var(--ship-color, var(--phosphor));
++  box-shadow: 0 0 10px rgba(93, 255, 196, 0.2), inset 0 0 8px rgba(93, 255, 196, 0.08);
++}
++.fleet-item.active::after {
++  content: 'PLACE NOW';
++  position: absolute; right: 4px; top: 4px;
++  font-size: 7px;
++}
++.fleet-item.pending { color: var(--text-mute); }
++
++@media (max-width: 899px) {
++  .phase-place #player-canvas { width: min(100%, 640px); }
++}
++@media (max-width: 720px) {
++  .pb-top { flex-direction: column; gap: 6px; }
++  .phase-place #player-canvas { width: 100%; }
++}
++
++/* The [hidden] attribute loses to `display: grid` above, which left the empty
++   RADIUS / BEARING / FIRE panel showing during deployment. */
++.controls[hidden] { display: none; }
++
++/* ===== PHONE POLISH (placement) ===== */
++@media (max-width: 720px) {
++  .phase-place .boards { padding: 8px 6px; }
++  .phase-place .board-card { padding: 8px 8px 9px; }
++  .place-banner { margin: 8px 6px 0; padding: 8px 12px 10px; }
++  .pb-hint { font-size: 12px; text-align: center; }
++  .tool-btn { font-size: 10px; letter-spacing: 0.06em; padding: 9px 4px; white-space: nowrap; }
++  /* the corner tags collide with ship names in the narrow tray; the highlighted border says it already */
++  .phase-place .fleet-item.active::after,
++  .phase-place .fleet-item.placed::after { display: none; }
++  .phase-place .fleet-item { font-size: 9px; }
++}

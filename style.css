@@ -429,75 +429,204 @@ canvas {
 }
 
 /* ===== PHASE 1: PLACEMENT ===== */
-/* During placement only the friendly board is shown, centered. */
+/* During placement only the friendly board is shown, centred and enlarged. */
 .phase-place .boards {
   grid-template-columns: 1fr;
-  max-width: 560px;
+  max-width: 760px;
 }
-.phase-place #cpu-card {
-  display: none;
+.phase-place #cpu-card { display: none; }
+.phase-place #player-canvas {
+  /* As big as fits under the banner (capped), never too small to click */
+  width: min(100%, max(420px, calc(100vh - 290px)), 720px);
+  margin: 0 auto;
+  touch-action: none;
 }
 
-/* Deployment-orders panel: visible only in the placement phase. */
-.deploy-orders {
+/* Wide screens: tools and fleet sit beside the board so it can use the height */
+@media (min-width: 900px) {
+  .phase-place .boards { max-width: 1040px; }
+  .phase-place #player-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 250px;
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas:
+      "head  head"
+      "board tools"
+      "board fleet";
+    column-gap: 16px;
+  }
+  .phase-place #player-card .card-header { grid-area: head; }
+  .phase-place #player-card canvas { grid-area: board; justify-self: center; }
+  .phase-place #player-card .place-tools {
+    grid-area: tools;
+    flex-direction: column;
+    align-self: start;
+    margin-top: 0;
+  }
+  .phase-place #player-card .card-footer { grid-area: fleet; align-self: start; margin-top: 14px; }
+  .phase-place #player-card .fleet-list { flex-direction: column; }
+  .phase-place #player-card .fleet-item { padding: 8px 10px; font-size: 10px; }
+  .phase-place #player-card .fleet-item::after { top: 8px !important; right: 8px !important; font-size: 8px !important; }
+}
+
+/* --- Big "PLACE YOUR <ship>" banner --- */
+.place-banner {
   display: none;
-  border: 1px solid var(--phosphor-dim);
-  background: linear-gradient(to bottom, #0a1c20, #06141a);
-  padding: 9px 11px 10px;
-  margin-bottom: 7px;
-}
-.phase-place .deploy-orders {
-  display: block;
-}
-.deploy-title {
-  display: block;
-  font-size: 9px;
-  letter-spacing: 0.3em;
-  color: var(--phosphor);
-  text-shadow: 0 0 6px var(--phosphor-glow);
-  font-weight: bold;
-  margin-bottom: 5px;
-}
-.deploy-line {
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  color: var(--text-main);
-  line-height: 1.45;
-  margin-bottom: 5px;
-}
-.deploy-steps {
-  list-style: none;
-  counter-reset: deploy;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-bottom: 5px;
-}
-.deploy-steps li {
-  counter-increment: deploy;
+  --ship-color: #5dffc4;
+  --ship-glow: rgba(93, 255, 196, 0.5);
+  max-width: 1000px;
+  margin: 14px auto 0;
+  padding: 10px 22px 12px;
+  text-align: center;
   position: relative;
-  padding-left: 20px;
-  font-size: 9.5px;
-  letter-spacing: 0.03em;
-  color: var(--text-main);
-  line-height: 1.4;
+  background: linear-gradient(to bottom, rgba(10, 28, 32, 0.96), rgba(6, 16, 22, 0.96));
+  border: 2px solid var(--ship-color);
+  box-shadow: inset 0 0 34px rgba(0, 0, 0, 0.55), inset 0 0 22px var(--ship-glow);
+  clip-path: polygon(
+    16px 0, 100% 0, 100% calc(100% - 16px),
+    calc(100% - 16px) 100%, 0 100%, 0 16px
+  );
 }
-.deploy-steps li::before {
-  content: counter(deploy);
-  position: absolute;
-  left: 0; top: 0;
-  width: 14px; height: 14px;
-  border: 1px solid var(--phosphor-dim);
-  color: var(--phosphor);
-  font-size: 8px;
+.phase-place .place-banner { display: block; }
+.place-banner.flash { animation: bannerFlash 0.55s ease-out; }
+@keyframes bannerFlash {
+  0%   { transform: scale(0.97); filter: brightness(2); }
+  100% { transform: scale(1);    filter: brightness(1); }
+}
+
+.pb-top {
   display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
+  margin-bottom: 2px;
 }
-.deploy-foot {
-  display: block;
-  font-size: 8px;
-  letter-spacing: 0.18em;
+.pb-kicker {
+  font-size: 10px;
+  letter-spacing: 0.35em;
   color: var(--text-mute);
+}
+.pb-title {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 900;
+  font-size: clamp(24px, 4.9vw, 48px);
+  line-height: 1.08;
+  letter-spacing: 0.09em;
+  color: var(--text-main);
+  text-shadow: 0 0 16px var(--ship-glow);
+  text-wrap: balance;
+}
+.pb-title #pb-ship {
+  color: var(--ship-color);
+  text-shadow: 0 0 10px var(--ship-color), 0 0 32px var(--ship-glow);
+}
+.pb-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 26px;
+  margin-top: 8px;
+}
+.pb-size { display: flex; align-items: center; gap: 12px; }
+.pb-icon { height: 28px; width: auto; filter: drop-shadow(0 0 6px var(--ship-glow)); }
+.pb-spaces {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.25em;
+  color: var(--ship-color);
+}
+.pb-hint {
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  color: var(--text-main);
   text-transform: uppercase;
+}
+.pb-hint b {
+  display: inline-block;
+  margin-right: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--ship-color);
+  color: var(--ship-color);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+}
+.pb-hint .pb-esc { color: var(--text-mute); font-size: 10px; margin-left: 4px; }
+.pb-hint.warn { color: var(--red-alert); text-shadow: 0 0 8px var(--red-glow); }
+.pb-pips { display: flex; gap: 8px; }
+.pip {
+  width: 26px; height: 8px;
+  border: 1px solid var(--bg-card-edge);
+  background: transparent;
+  transform: skewX(-20deg);
+}
+.pip.active { border-color: var(--ship-color); box-shadow: 0 0 8px var(--ship-glow); }
+.pip.done { background: var(--phosphor-dim); border-color: var(--phosphor); }
+
+/* live (theta, r) readout in the board header */
+.card-readout { display: none; white-space: pre; color: var(--phosphor); letter-spacing: 0.15em; }
+.phase-place .card-readout { display: inline; }
+
+/* --- Placement toolbar --- */
+.place-tools { display: none; gap: 8px; margin-top: 8px; }
+.phase-place .place-tools { display: flex; }
+.tool-btn {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--bg-card-edge);
+  color: var(--text-main);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  padding: 9px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tool-btn:hover:not(:disabled) { border-color: var(--phosphor-dim); color: var(--phosphor); }
+.tool-btn.alt { border-color: var(--amber-dim); color: var(--amber); }
+.tool-btn.alt:hover:not(:disabled) { border-color: var(--amber); box-shadow: 0 0 10px rgba(255, 184, 77, 0.3); }
+.tool-btn:disabled { opacity: 0.35; cursor: default; }
+
+/* --- Fleet tray states during deployment --- */
+.fleet-item.placed { color: var(--phosphor); border-color: var(--phosphor-dim); }
+.fleet-item.placed::after {
+  content: 'READY';
+  position: absolute; right: 4px; top: 4px;
+  font-size: 7px; color: var(--phosphor);
+}
+.fleet-item.active {
+  color: var(--ship-color, var(--phosphor));
+  border-color: var(--ship-color, var(--phosphor));
+  box-shadow: 0 0 10px rgba(93, 255, 196, 0.2), inset 0 0 8px rgba(93, 255, 196, 0.08);
+}
+.fleet-item.active::after {
+  content: 'PLACE NOW';
+  position: absolute; right: 4px; top: 4px;
+  font-size: 7px;
+}
+.fleet-item.pending { color: var(--text-mute); }
+
+@media (max-width: 899px) {
+  .phase-place #player-canvas { width: min(100%, 640px); }
+}
+@media (max-width: 720px) {
+  .pb-top { flex-direction: column; gap: 6px; }
+  .phase-place #player-canvas { width: 100%; }
+}
+
+/* The [hidden] attribute loses to `display: grid` above, which left the empty
+   RADIUS / BEARING / FIRE panel showing during deployment. */
+.controls[hidden] { display: none; }
+
+/* ===== PHONE POLISH (placement) ===== */
+@media (max-width: 720px) {
+  .phase-place .boards { padding: 8px 6px; }
+  .phase-place .board-card { padding: 8px 8px 9px; }
+  .place-banner { margin: 8px 6px 0; padding: 8px 12px 10px; }
+  .pb-hint { font-size: 12px; text-align: center; }
+  .tool-btn { font-size: 10px; letter-spacing: 0.06em; padding: 9px 4px; white-space: nowrap; }
+  /* the corner tags collide with ship names in the narrow tray; the highlighted border says it already */
+  .phase-place .fleet-item.active::after,
+  .phase-place .fleet-item.placed::after { display: none; }
+  .phase-place .fleet-item { font-size: 9px; }
 }

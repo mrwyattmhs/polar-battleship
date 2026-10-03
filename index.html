@@ -21,7 +21,7 @@
   </div>
   <h1 class="title">
     <span class="title-main">POLAR BATTLESHIP</span>
-    <span class="title-sub">// SONAR COMMAND v1.1</span>
+    <span class="title-sub">// SONAR COMMAND v1.2</span>
   </h1>
   <div class="hud-cluster right">
     <span class="hud-tag">TIME</span>
@@ -29,24 +29,31 @@
   </div>
 </header>
 
+<section class="place-banner" id="place-banner" aria-live="polite">
+  <div class="pb-top">
+    <span class="pb-kicker" id="pb-kicker">DEPLOYMENT // SHIP 1 OF 3</span>
+    <span class="pb-pips" id="pb-pips"></span>
+  </div>
+  <h2 class="pb-title">PLACE YOUR <span id="pb-ship">DESTROYER</span></h2>
+  <div class="pb-row">
+    <div class="pb-size" id="pb-size"></div>
+    <div class="pb-hint" id="pb-hint"></div>
+  </div>
+</section>
+
 <main class="boards">
   <section class="board-card" id="player-card">
     <div class="card-header">
       <span class="card-label">FRIENDLY</span>
+      <span class="card-readout" id="pb-readout">CURSOR  &mdash;</span>
       <span class="card-id">ALPHA-01</span>
     </div>
-    <div class="deploy-orders" id="deploy-orders">
-      <span class="deploy-title">// DEPLOYMENT ORDERS</span>
-      <p class="deploy-line">Position your fleet on the friendly grid before engaging the enemy.</p>
-      <ol class="deploy-steps">
-        <li>Click grid intersections to lay each ship, point by point.</li>
-        <li>Every point must touch an end of the current ship &mdash; along an arc or a radius.</li>
-        <li>Each ship locks straight once two points are set; no bends.</li>
-        <li>DESTROYER (2) &rarr; BATTLESHIP (3) &rarr; CARRIER (4), in order.</li>
-      </ol>
-      <span class="deploy-foot">Hostile sector stays dark until your fleet is deployed.</span>
-    </div>
     <canvas id="player-canvas" width="560" height="560"></canvas>
+    <div class="place-tools" id="place-tools">
+      <button class="tool-btn" id="undo-btn" type="button">&#8630; UNDO SHIP</button>
+      <button class="tool-btn" id="reset-btn" type="button">RESET</button>
+      <button class="tool-btn alt" id="auto-btn" type="button">AUTO-DEPLOY</button>
+    </div>
     <div class="card-footer">
       <span class="fleet-tag">FLEET STATUS</span>
       <div class="fleet-list" id="player-fleet"></div>
