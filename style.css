@@ -437,7 +437,7 @@ canvas {
 .phase-place #cpu-card { display: none; }
 .phase-place #player-canvas {
   /* As big as fits under the banner (capped), never too small to click */
-  width: min(100%, max(420px, calc(100vh - 290px)), 720px);
+  width: min(100%, max(420px, calc(100vh - 320px)), 720px);
   margin: 0 auto;
   touch-action: none;
 }
@@ -488,23 +488,58 @@ canvas {
   );
 }
 .phase-place .place-banner { display: block; }
-.place-banner.flash { animation: bannerFlash 0.55s ease-out; }
+.place-banner.flash { animation: bannerFlash 0.6s ease-out; }
 @keyframes bannerFlash {
-  0%   { transform: scale(0.97); filter: brightness(2); }
-  100% { transform: scale(1);    filter: brightness(1); }
+  0%   { transform: scale(0.975); filter: brightness(2.2); }
+  100% { transform: scale(1);     filter: brightness(1); }
 }
 
+/* progress row: "SHIP 2 OF 3" + one chip per ship */
 .pb-top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 2px;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  margin-bottom: 4px;
 }
-.pb-kicker {
-  font-size: 10px;
-  letter-spacing: 0.35em;
+.pb-count {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.22em;
+  color: var(--ship-color);
+  text-shadow: 0 0 10px var(--ship-glow);
+}
+.pb-steps { list-style: none; display: flex; gap: 8px; }
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border: 1px solid var(--bg-card-edge);
+  font-size: 11px;
+  letter-spacing: 0.14em;
   color: var(--text-mute);
+  transform: skewX(-12deg);
 }
+.chip > * { display: inline-block; transform: skewX(12deg); }
+.chip-mark { font-family: system-ui, sans-serif; font-size: 11px; }
+.chip-size { opacity: 0.7; font-size: 9px; }
+.chip.active {
+  color: var(--chip-color);
+  border-color: var(--chip-color);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 0 12px var(--ship-glow);
+}
+.chip.done {
+  color: #04120d;
+  background: var(--phosphor);
+  border-color: var(--phosphor);
+  font-weight: bold;
+  box-shadow: 0 0 10px var(--phosphor-glow);
+}
+
 .pb-title {
   font-family: 'Orbitron', sans-serif;
   font-weight: 900;
@@ -526,6 +561,7 @@ canvas {
   flex-wrap: wrap;
   gap: 8px 26px;
   margin-top: 8px;
+  min-height: 30px;
 }
 .pb-size { display: flex; align-items: center; gap: 12px; }
 .pb-icon { height: 28px; width: auto; filter: drop-shadow(0 0 6px var(--ship-glow)); }
@@ -553,39 +589,68 @@ canvas {
 }
 .pb-hint .pb-esc { color: var(--text-mute); font-size: 10px; margin-left: 4px; }
 .pb-hint.warn { color: var(--red-alert); text-shadow: 0 0 8px var(--red-glow); }
-.pb-pips { display: flex; gap: 8px; }
-.pip {
-  width: 26px; height: 8px;
-  border: 1px solid var(--bg-card-edge);
-  background: transparent;
-  transform: skewX(-20deg);
+.pb-hint.good {
+  color: var(--phosphor);
+  font-weight: bold;
+  font-size: 15px;
+  text-shadow: 0 0 10px var(--phosphor-glow);
 }
-.pip.active { border-color: var(--ship-color); box-shadow: 0 0 8px var(--ship-glow); }
-.pip.done { background: var(--phosphor-dim); border-color: var(--phosphor); }
+
+/* the one big button that appears when all three ships are placed */
+.pb-start {
+  display: block;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: 0.26em;
+  padding: 9px 30px;
+  background: linear-gradient(to bottom, #0f4a3a, #082a22);
+  border: 2px solid var(--phosphor);
+  color: var(--phosphor);
+  text-shadow: 0 0 10px var(--phosphor-glow);
+  box-shadow: 0 0 22px var(--phosphor-glow), inset 0 0 14px rgba(0, 0, 0, 0.5);
+  cursor: pointer;
+  animation: startPulse 1.5s ease-in-out infinite;
+}
+.pb-start[hidden] { display: none; }
+.pb-start:hover { background: linear-gradient(to bottom, #146b55, #0a3a2e); }
+.pb-start:active { transform: translateY(1px); }
+@keyframes startPulse {
+  50% { box-shadow: 0 0 38px var(--phosphor-glow), inset 0 0 14px rgba(0, 0, 0, 0.5); }
+}
 
 /* live (theta, r) readout in the board header */
 .card-readout { display: none; white-space: pre; color: var(--phosphor); letter-spacing: 0.15em; }
 .phase-place .card-readout { display: inline; }
 
-/* --- Placement toolbar --- */
+/* --- Placement toolbar: three equal, quiet buttons that are always clickable --- */
 .place-tools { display: none; gap: 8px; margin-top: 8px; }
 .phase-place .place-tools { display: flex; }
 .tool-btn {
   flex: 1;
-  background: var(--bg-card);
-  border: 1px solid var(--bg-card-edge);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(93, 255, 196, 0.06);
+  border: 1px solid var(--phosphor-dim);
   color: var(--text-main);
   font-family: 'Share Tech Mono', monospace;
   font-size: 11px;
-  letter-spacing: 0.2em;
-  padding: 9px 8px;
+  letter-spacing: 0.16em;
+  padding: 11px 8px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.tool-btn:hover:not(:disabled) { border-color: var(--phosphor-dim); color: var(--phosphor); }
-.tool-btn.alt { border-color: var(--amber-dim); color: var(--amber); }
-.tool-btn.alt:hover:not(:disabled) { border-color: var(--amber); box-shadow: 0 0 10px rgba(255, 184, 77, 0.3); }
-.tool-btn:disabled { opacity: 0.35; cursor: default; }
+.tool-btn svg {
+  width: 14px; height: 14px; flex: none;
+  fill: none; stroke: currentColor; stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.tool-btn svg circle { fill: currentColor; stroke: none; }
+.tool-btn:hover { border-color: var(--phosphor); color: var(--phosphor); background: rgba(93, 255, 196, 0.13); }
+.tool-btn:active { transform: translateY(1px); }
+.tool-btn.idle { opacity: 0.6; }   /* nothing to do yet, but still clickable and it explains itself */
 
 /* --- Fleet tray states during deployment --- */
 .fleet-item.placed { color: var(--phosphor); border-color: var(--phosphor-dim); }
@@ -610,7 +675,11 @@ canvas {
   .phase-place #player-canvas { width: min(100%, 640px); }
 }
 @media (max-width: 720px) {
-  .pb-top { flex-direction: column; gap: 6px; }
+  .pb-top { justify-content: center; }
+  .pb-steps { gap: 5px; }
+  .chip { padding: 4px 7px; font-size: 9px; letter-spacing: 0.06em; gap: 4px; }
+  .chip-size { display: none; }
+  .pb-start { font-size: 15px; padding: 10px 20px; letter-spacing: 0.18em; }
   .phase-place #player-canvas { width: 100%; }
 }
 

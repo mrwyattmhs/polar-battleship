@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Major+Mono+Display&family=Share+Tech+Mono&family=Orbitron:wght@500;700;900&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=1.3">
 </head>
 <body class="phase-place">
 
@@ -21,7 +21,7 @@
   </div>
   <h1 class="title">
     <span class="title-main">POLAR BATTLESHIP</span>
-    <span class="title-sub">// SONAR COMMAND v1.2</span>
+    <span class="title-sub">// SONAR COMMAND v1.3</span>
   </h1>
   <div class="hud-cluster right">
     <span class="hud-tag">TIME</span>
@@ -31,13 +31,14 @@
 
 <section class="place-banner" id="place-banner" aria-live="polite">
   <div class="pb-top">
-    <span class="pb-kicker" id="pb-kicker">DEPLOYMENT // SHIP 1 OF 3</span>
-    <span class="pb-pips" id="pb-pips"></span>
+    <div class="pb-count" id="pb-count">SHIP 1 OF 3</div>
+    <ol class="pb-steps" id="pb-steps"></ol>
   </div>
-  <h2 class="pb-title">PLACE YOUR <span id="pb-ship">DESTROYER</span></h2>
+  <h2 class="pb-title"><span id="pb-pre">PLACE YOUR</span> <span id="pb-ship">DESTROYER</span></h2>
   <div class="pb-row">
     <div class="pb-size" id="pb-size"></div>
     <div class="pb-hint" id="pb-hint"></div>
+    <button class="pb-start" id="start-btn" type="button" hidden>START BATTLE &#9654;</button>
   </div>
 </section>
 
@@ -50,9 +51,9 @@
     </div>
     <canvas id="player-canvas" width="560" height="560"></canvas>
     <div class="place-tools" id="place-tools">
-      <button class="tool-btn" id="undo-btn" type="button">&#8630; UNDO SHIP</button>
-      <button class="tool-btn" id="reset-btn" type="button">RESET</button>
-      <button class="tool-btn alt" id="auto-btn" type="button">AUTO-DEPLOY</button>
+      <button class="tool-btn" id="undo-btn" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3 L2 6 L5 9 M2 6 H10 a4 4 0 0 1 0 8 H6"/></svg>UNDO SHIP</button>
+      <button class="tool-btn" id="reset-btn" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5 L12.5 12.5 M12.5 3.5 L3.5 12.5"/></svg>RESET</button>
+      <button class="tool-btn" id="auto-btn" type="button"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="12" height="12" rx="2.5"/><circle cx="5.5" cy="5.5" r="0.9"/><circle cx="8" cy="8" r="0.9"/><circle cx="10.5" cy="10.5" r="0.9"/></svg>AUTO-DEPLOY</button>
     </div>
     <div class="card-footer">
       <span class="fleet-tag">FLEET STATUS</span>
@@ -97,6 +98,17 @@
 
 <div id="banner" class="banner hidden"></div>
 
-<script src="game.js"></script>
+<script src="game.js?v=1.3"></script>
+<script>
+  /* If game.js is older than this page (cached, or not uploaded), say so. */
+  if (window.PB_VERSION !== '1.3') {
+    var d = document.createElement('div');
+    d.setAttribute('style', 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#b00020;color:#fff;' +
+      'padding:14px 18px;font:16px/1.45 system-ui,sans-serif;text-align:center;box-shadow:0 4px 18px #000');
+    d.innerHTML = '<b>Old game.js is loading.</b> This page needs game.js v1.3. Replace index.html, style.css and ' +
+      'game.js together, then hard-refresh (Ctrl+Shift+R, or Cmd+Shift+R on a Mac).';
+    document.body.prepend(d);
+  }
+</script>
 </body>
 </html>

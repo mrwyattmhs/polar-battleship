@@ -2,6 +2,26 @@
 // POLAR BATTLESHIP - Canvas/JS port
 // ============================================================
 
+// ---------- File-version guard ----------
+// index.html, style.css and game.js must all be the same version. If a stale
+// copy of one is cached or was not uploaded, say so loudly instead of
+// failing silently.
+window.PB_VERSION = '1.3';
+(function () {
+  const need = ['place-banner', 'pb-count', 'pb-steps', 'pb-pre', 'pb-ship', 'pb-size',
+                'pb-hint', 'pb-readout', 'start-btn', 'undo-btn', 'reset-btn', 'auto-btn'];
+  const missing = need.filter(id => !document.getElementById(id));
+  if (missing.length === 0) return;
+  const d = document.createElement('div');
+  d.setAttribute('style', 'position:fixed;top:0;left:0;right:0;z-index:100000;background:#b00020;color:#fff;' +
+    'padding:14px 18px;font:16px/1.45 system-ui,sans-serif;text-align:center;box-shadow:0 4px 18px #000');
+  d.innerHTML = '<b>index.html is out of date.</b> game.js v1.3 needs the matching index.html and style.css ' +
+    '(missing: #' + missing.join(', #') + '). Replace all three files together, then hard-refresh ' +
+    '(Ctrl+Shift+R, or Cmd+Shift+R on a Mac).';
+  document.body.prepend(d);
+  throw new Error('index.html is out of date; missing #' + missing.join(', #'));
+})();
+
 // ---------- Angles ----------
 // Generate all special angles: multiples of pi/6, pi/4, pi/3, pi/2 in [0, 2pi)
 function gcd(a, b) { return b ? gcd(b, a % b) : a; }
@@ -155,8 +175,10 @@ const state = {
     anchor: null,          // chosen start berth [ai, r], or null
     hover: null,           // berth under the pointer
     dragging: false,
-    msg: '',               // transient warning shown in the banner
+    msg: '',               // transient message shown in the banner
+    msgKind: 'warn',       // 'warn' | 'good'
     msgTimer: null,
+    lock: null,            // { idx, t0 } for the "ship deployed" animation
   },
 };
 
@@ -676,7 +698,7 @@ function redrawPlayer() {
     drawHull(pctx, size, ship, idx, sunk ? '#ff4d5e' : SHIP_COLORS[idx],
              sunk ? { wreck: true, alpha: 0.85 } : {});
   });
-  if (state.phase === 'place') drawPlacementOverlay(pctx, size);
+  if (state.phase === 'place') { drawShipLabels(pctx, size); drawPlacementOverlay(pctx, size); }
   drawHitsMisses(pctx, size, state.playerHitPoints, state.playerMissPoints);
 }
 function redrawCpu() {
@@ -780,10 +802,14 @@ function renderFleets() {
 //   2. Click (or drag to) one of the glowing berths to aim it.
 // Every legal ship is a straight line along a ring, or along a spoke (a spoke
 // may run through the origin and out the opposite bearing).
+// After the third ship the fleet is READY: nothing starts until the player
+// presses START BATTLE, so Undo / Reset / Auto-Deploy stay useful to the end.
 
 const HALF_TURN = N_ANG / 2;   // index offset that adds pi to an angle
 const modAng = (n) => ((n % N_ANG) + N_ANG) % N_ANG;
 const sameCell = (p, q) => cellKey(p) === cellKey(q);
+const isReady = () => state.currentShip >= NUM_SHIPS;
+const $id = (id) => document.getElementById(id);
 
 function usedKeysPlayer() {
   return new Set(state.shipsPlayer.flat().map(cellKey));
@@ -885,29 +911,64 @@ function shipIconSVG(idx, color) {
 
 // ----- Banner / status text -----
 function placeStatusLine() {
-  const i = Math.min(state.currentShip, NUM_SHIPS - 1);
+  if (isReady()) return 'FLEET READY — REVIEW IT, THEN PRESS START BATTLE.';
+  const i = state.currentShip;
   return state.place.anchor
     ? `STEP 2 — CLICK A GLOWING SPOT TO AIM YOUR ${SHIP_NAMES[i]}.`
     : `PLACE YOUR ${SHIP_NAMES[i]} (${SHIP_SIZES[i]} SPACES). CLICK A START SPOT ON THE FRIENDLY GRID.`;
 }
 
+// Transient message in the banner. kind: 'warn' (red) or 'good' (green).
+function setPlaceMsg(msg, kind, ms) {
+  clearTimeout(state.place.msgTimer);
+  state.place.msg = msg;
+  state.place.msgKind = kind || 'warn';
+  state.place.msgTimer = setTimeout(() => {
+    state.place.msg = '';
+    updatePlaceBanner();
+  }, ms || 2200);
+  updatePlaceBanner();
+}
+function flashHint(msg) { setStatus(msg); setPlaceMsg(msg, 'warn', 2200); }
+function clearPlaceMsg() { clearTimeout(state.place.msgTimer); state.place.msg = ''; }
+
 function updatePlaceBanner(flash) {
-  const banner = document.getElementById('place-banner');
+  const banner = $id('place-banner');
   if (!banner) return;
+  const ready = isReady();
   const idx = Math.min(state.currentShip, NUM_SHIPS - 1);
-  const color = SHIP_COLORS[idx];
-  const name = SHIP_NAMES[idx].toLowerCase();
+  const color = ready ? '#5dffc4' : SHIP_COLORS[idx];
   banner.style.setProperty('--ship-color', color);
   banner.style.setProperty('--ship-glow', hexToRgba(color, 0.5));
-  document.getElementById('pb-kicker').textContent = `DEPLOYMENT // SHIP ${idx + 1} OF ${NUM_SHIPS}`;
-  document.getElementById('pb-ship').textContent = SHIP_NAMES[idx];
-  document.getElementById('pb-size').innerHTML =
+  banner.classList.toggle('ready', ready);
+
+  // Progress: "SHIP 2 OF 3" plus a chip per ship (done / current / waiting)
+  $id('pb-count').textContent = ready
+    ? `ALL ${NUM_SHIPS} SHIPS PLACED`
+    : `SHIP ${state.currentShip + 1} OF ${NUM_SHIPS}`;
+  $id('pb-steps').innerHTML = SHIP_NAMES.map((n, i) => {
+    const st = i < state.currentShip ? 'done' : (i === state.currentShip ? 'active' : 'todo');
+    const mark = st === 'done' ? '✓' : (st === 'active' ? '▶' : '○');
+    return `<li class="chip ${st}" style="--chip-color:${SHIP_COLORS[i]}">` +
+      `<span class="chip-mark">${mark}</span><span class="chip-name">${n}</span>` +
+      `<span class="chip-size">${SHIP_SIZES[i]}</span></li>`;
+  }).join('');
+
+  // Headline
+  $id('pb-pre').textContent = ready ? 'FLEET' : 'PLACE YOUR';
+  $id('pb-ship').textContent = ready ? 'READY' : SHIP_NAMES[idx];
+  $id('pb-size').innerHTML = ready ? '' :
     shipIconSVG(idx, color) + `<span class="pb-spaces">${SHIP_SIZES[idx]} SPACES</span>`;
 
-  const hint = document.getElementById('pb-hint');
+  // One line telling the player exactly what to do (or what just happened)
+  const hint = $id('pb-hint');
+  const name = ready ? '' : SHIP_NAMES[idx].toLowerCase();
   if (state.place.msg) {
-    hint.className = 'pb-hint warn';
+    hint.className = 'pb-hint ' + (state.place.msgKind === 'good' ? 'good' : 'warn');
     hint.textContent = state.place.msg;
+  } else if (ready) {
+    hint.className = 'pb-hint';
+    hint.innerHTML = '<b>READY</b> Press START BATTLE, or Undo / Auto-Deploy to change';
   } else if (state.place.anchor) {
     hint.className = 'pb-hint';
     hint.innerHTML = `<b>STEP 2</b> Click a glowing spot to aim your ${name} <span class="pb-esc">(ESC cancels)</span>`;
@@ -915,12 +976,11 @@ function updatePlaceBanner(flash) {
     hint.className = 'pb-hint';
     hint.innerHTML = `<b>STEP 1</b> Click a spot on the grid to start your ${name}`;
   }
-  document.getElementById('pb-pips').innerHTML = SHIP_NAMES.map((n, i) =>
-    `<span class="pip ${i < state.currentShip ? 'done' : (i === state.currentShip ? 'active' : '')}" title="${n}"></span>`
-  ).join('');
 
-  document.getElementById('undo-btn').disabled = state.currentShip === 0;
-  document.getElementById('reset-btn').disabled = state.currentShip === 0 && !state.place.anchor;
+  $id('start-btn').hidden = !ready;
+  // Buttons are never disabled; they just look quiet when there is nothing for them to do
+  $id('undo-btn').classList.toggle('idle', state.currentShip === 0 && !state.place.anchor);
+  $id('reset-btn').classList.toggle('idle', state.currentShip === 0 && !state.place.anchor);
 
   if (flash) {
     banner.classList.remove('flash');
@@ -929,21 +989,97 @@ function updatePlaceBanner(flash) {
   }
 }
 
-function flashHint(msg) {
-  state.place.msg = msg;
-  clearTimeout(state.place.msgTimer);
-  state.place.msgTimer = setTimeout(() => {
-    state.place.msg = '';
-    updatePlaceBanner();
-  }, 2000);
-  setStatus(msg);
-  updatePlaceBanner();
+// ----- Canvas feedback: lock-in ripple + toast, and a name tag on each placed ship -----
+function rrect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function drawLockEffect(ctx, size, now) {
+  const lk = state.place.lock;
+  if (!lk) return;
+  const u = uScale(size);
+  const age = (now - lk.t0) / 1000;
+  const ship = state.shipsPlayer[lk.idx];
+  if (age > 2 || !ship || ship.length < 2) { state.place.lock = null; return; }
+  const color = SHIP_COLORS[lk.idx];
+
+  // Two expanding rings on every berth of the ship that was just placed
+  if (age < 1.2) {
+    for (const cell of ship) {
+      const { x, y } = polarToXY(cell[0], cell[1], size);
+      for (let wv = 0; wv < 2; wv++) {
+        const p = (age - wv * 0.25) / 0.9;
+        if (p < 0 || p > 1) continue;
+        ctx.strokeStyle = hexToRgba(color, (1 - p) * 0.95);
+        ctx.lineWidth = (3.2 * (1 - p) + 0.8) * u;
+        ctx.beginPath();
+        ctx.arc(x, y, (8 + p * 32) * u, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Toast pill across the top of the board
+  const a = age < 0.15 ? age / 0.15 : (age > 1.5 ? Math.max(0, (2 - age) / 0.5) : 1);
+  const text = `✓ ${SHIP_NAMES[lk.idx]} DEPLOYED`;
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.font = `bold ${Math.round(15 * Math.max(1, u * 0.9))}px "Orbitron","Share Tech Mono",sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const tw = ctx.measureText(text).width + 36 * u, th = 32 * u;
+  const tx = size / 2 - tw / 2, ty = 8 * u - (1 - a) * 8;
+  rrect(ctx, tx, ty, tw, th, 8 * u);
+  ctx.fillStyle = 'rgba(3, 12, 16, 0.94)';
+  ctx.fill();
+  ctx.lineWidth = 2 * u;
+  ctx.strokeStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 14;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = color;
+  ctx.fillText(text, size / 2, ty + th / 2 + 1);
+  ctx.restore();
+}
+
+function drawShipLabels(ctx, size) {
+  const u = uScale(size);
+  const cx = size / 2, cy = size / 2;
+  ctx.save();
+  ctx.font = `bold ${Math.round(10.5 * Math.max(1, u * 0.95))}px "Share Tech Mono",monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineJoin = 'round';
+  state.shipsPlayer.forEach((ship, idx) => {
+    if (ship.length < 2) return;
+    const { at, total } = shipPath(ship, size, 0);
+    const m = at(total / 2);
+    let nx = Math.cos(m.ang + Math.PI / 2), ny = Math.sin(m.ang + Math.PI / 2);
+    if ((m.x - cx) * nx + (m.y - cy) * ny < 0) { nx = -nx; ny = -ny; }   // push the tag away from the centre
+    const off = ((idx === 2 ? 12 : idx === 1 ? 10.5 : 9) + 13) * u;
+    const lx = Math.max(36 * u, Math.min(size - 36 * u, m.x + nx * off));
+    const ly = Math.max(12 * u, Math.min(size - 12 * u, m.y + ny * off));
+    ctx.lineWidth = 4 * u;
+    ctx.strokeStyle = 'rgba(3, 10, 14, 0.95)';
+    ctx.strokeText(SHIP_NAMES[idx], lx, ly);
+    ctx.fillStyle = SHIP_COLORS[idx];
+    ctx.fillText(SHIP_NAMES[idx], lx, ly);
+  });
+  ctx.restore();
 }
 
 // ----- Placement overlay (ghost hulls, beacons, hover) -----
 function drawPlacementOverlay(ctx, size) {
+  drawLockEffect(ctx, size, performance.now());
   const idx = state.currentShip;
-  if (idx >= NUM_SHIPS) return;
+  if (idx >= NUM_SHIPS) return;                    // fleet ready: nothing left to aim
   const u = uScale(size);
   const color = SHIP_COLORS[idx];
   const sz = SHIP_SIZES[idx];
@@ -1018,6 +1154,7 @@ function startFrom(cell, evt) {
     flashHint(`NO ROOM FOR A ${SHIP_NAMES[idx]} STARTING THERE — TRY ANOTHER SPOT`);
     return;
   }
+  clearPlaceMsg();
   state.place.anchor = cell.slice();
   state.place.dragging = true;
   if (evt && evt.pointerId !== undefined && playerCanvas.setPointerCapture) {
@@ -1033,30 +1170,47 @@ function commitShip(cells) {
   state.currentShip++;
   state.place.anchor = null;
   state.place.dragging = false;
-  if (state.currentShip >= NUM_SHIPS) {
-    finishDeployment();
+  state.place.lock = { idx, t0: performance.now() };
+  state.place.hover = null;          // the cursor is still on the new ship; don't flag it as "taken"
+  if (isReady()) {
+    setStatus(placeStatusLine());
+    setPlaceMsg(`✓ ${SHIP_NAMES[idx]} LOCKED IN — ALL SHIPS PLACED`, 'good', 4500);
   } else {
     const ni = state.currentShip;
     setStatus(`${SHIP_NAMES[idx]} DEPLOYED. NOW PLACE YOUR ${SHIP_NAMES[ni]} (${SHIP_SIZES[ni]} SPACES).`);
-    updatePlaceBanner(true);
+    setPlaceMsg(`✓ ${SHIP_NAMES[idx]} LOCKED IN — NEXT: ${SHIP_NAMES[ni]}`, 'good', 2800);
   }
+  updatePlaceBanner(true);
   renderFleets();
   redrawPlayer();
 }
 
-function finishDeployment() {
+function startBattle() {
+  if (state.phase !== 'place' || !isReady()) return;
+  clearPlaceMsg();
   generateCpuShips();
   startGuessingPhase();
   showBanner('FLEET DEPLOYED', 'sunk-hostile', 1400);
 }
 
 function undoShip() {
-  if (state.phase !== 'place' || state.currentShip === 0) return;
+  if (state.phase !== 'place') return;
+  if (state.place.anchor) {                           // mid-placement: undo means "pick another start"
+    cancelAnchor();
+    setPlaceMsg('START SPOT CLEARED — PICK AGAIN', 'good', 1800);
+    redrawPlayer();
+    return;
+  }
+  if (state.currentShip === 0) {
+    setPlaceMsg('NOTHING TO UNDO YET — PLACE A SHIP FIRST', 'warn', 2200);
+    return;
+  }
   state.currentShip--;
+  const name = SHIP_NAMES[state.currentShip];
   state.shipsPlayer[state.currentShip] = [];
-  state.place.anchor = null;
-  state.place.dragging = false;
-  setStatus(`UNDONE. PLACE YOUR ${SHIP_NAMES[state.currentShip]} AGAIN.`);
+  state.place.lock = null;
+  setStatus(`${name} REMOVED. PLACE YOUR ${name} AGAIN.`);
+  setPlaceMsg(`↶ ${name} REMOVED — PLACE IT AGAIN`, 'good', 2600);
   updatePlaceBanner(true);
   renderFleets();
   redrawPlayer();
@@ -1064,20 +1218,32 @@ function undoShip() {
 
 function resetPlacement() {
   if (state.phase !== 'place') return;
+  if (state.currentShip === 0 && !state.place.anchor) {
+    setPlaceMsg('NOTHING TO RESET — THE GRID IS EMPTY', 'warn', 2200);
+    return;
+  }
   state.shipsPlayer = [[], [], []];
   state.currentShip = 0;
   state.place.anchor = null;
   state.place.dragging = false;
+  state.place.lock = null;
   setStatus(placeStatusLine());
+  setPlaceMsg(`FLEET CLEARED — START OVER WITH THE ${SHIP_NAMES[0]}`, 'good', 2600);
   updatePlaceBanner(true);
   renderFleets();
   redrawPlayer();
 }
 
-// Drop whatever hasn't been placed yet at random, then start the battle
+// Place whatever is still missing at random (or reshuffle everything if the
+// fleet is already complete). It stops at READY; the player starts the battle.
 function autoDeploy() {
   if (state.phase !== 'place') return;
-  for (let attempt = 0; attempt < 500; attempt++) {
+  const reshuffle = isReady();
+  if (reshuffle) { state.shipsPlayer = [[], [], []]; state.currentShip = 0; }
+  state.place.anchor = null;
+  state.place.dragging = false;
+  let done = false;
+  for (let attempt = 0; attempt < 500 && !done; attempt++) {
     const used = new Set(state.shipsPlayer.flat().map(cellKey));
     const placed = [];
     let ok = true;
@@ -1090,18 +1256,24 @@ function autoDeploy() {
     if (ok) {
       placed.forEach((s, k) => { state.shipsPlayer[state.currentShip + k] = s; });
       state.currentShip = NUM_SHIPS;
-      break;
+      done = true;
     }
   }
-  if (state.currentShip >= NUM_SHIPS) {
-    state.place.anchor = null;
-    renderFleets();
-    finishDeployment();
+  state.place.lock = null;
+  if (done) {
+    setStatus(placeStatusLine());
+    setPlaceMsg(reshuffle ? '✓ FLEET RESHUFFLED' : '✓ FLEET AUTO-DEPLOYED — PRESS AUTO-DEPLOY AGAIN TO RESHUFFLE', 'good', 4500);
+  } else {
+    setPlaceMsg('COULD NOT FIT THE REMAINING SHIPS — PRESS RESET AND TRY AGAIN', 'warn', 3000);
   }
+  updatePlaceBanner(true);
+  renderFleets();
+  redrawPlayer();
 }
 
 // ----- Input -----
 function cursorFor(cell) {
+  if (isReady()) return 'default';
   if (!cell) return 'crosshair';
   if (state.place.anchor) {
     const cands = candidatesFrom(state.place.anchor, SHIP_SIZES[state.currentShip]);
@@ -1112,19 +1284,18 @@ function cursorFor(cell) {
 
 playerCanvas.addEventListener('pointermove', (evt) => {
   if (state.phase !== 'place') return;
-  const cell = berthAt(evt);
+  const cell = isReady() ? null : berthAt(evt);
   state.place.hover = cell;
-  document.getElementById('pb-readout').textContent = cell ? `CURSOR  ${cellLabel(cell)}` : 'CURSOR  —';
+  $id('pb-readout').textContent = cell ? `CURSOR  ${cellLabel(cell)}` : 'CURSOR  —';
   playerCanvas.style.cursor = cursorFor(cell);
 });
 playerCanvas.addEventListener('pointerleave', () => {
   state.place.hover = null;
-  const ro = document.getElementById('pb-readout');
-  if (ro) ro.textContent = 'CURSOR  —';
+  $id('pb-readout').textContent = 'CURSOR  —';
 });
 
 playerCanvas.addEventListener('pointerdown', (evt) => {
-  if (state.phase !== 'place' || state.currentShip >= NUM_SHIPS) return;
+  if (state.phase !== 'place' || isReady()) return;
   if (evt.button !== undefined && evt.button !== 0) return;
   const pl = state.place;
   pl.dragging = false;
@@ -1144,7 +1315,7 @@ playerCanvas.addEventListener('pointerup', (evt) => {
   const pl = state.place;
   if (!pl.dragging) return;
   pl.dragging = false;
-  if (state.phase !== 'place' || !pl.anchor) return;
+  if (state.phase !== 'place' || !pl.anchor || isReady()) return;
   const cell = berthAt(evt);
   if (!cell || sameCell(cell, pl.anchor)) return;
   const hit = candidateFor(cell, candidatesFrom(pl.anchor, SHIP_SIZES[state.currentShip]));
@@ -1161,15 +1332,17 @@ playerCanvas.addEventListener('contextmenu', (evt) => {
 document.addEventListener('keydown', (evt) => {
   if (state.phase !== 'place') return;
   if (evt.key === 'Escape') cancelAnchor();
+  if (evt.key === 'Enter' && isReady()) { evt.preventDefault(); startBattle(); }
   if ((evt.ctrlKey || evt.metaKey) && evt.key.toLowerCase() === 'z') {
     evt.preventDefault();
     undoShip();
   }
 });
 
-document.getElementById('undo-btn').addEventListener('click', undoShip);
-document.getElementById('reset-btn').addEventListener('click', resetPlacement);
-document.getElementById('auto-btn').addEventListener('click', autoDeploy);
+$id('undo-btn').addEventListener('click', undoShip);
+$id('reset-btn').addEventListener('click', resetPlacement);
+$id('auto-btn').addEventListener('click', autoDeploy);
+$id('start-btn').addEventListener('click', startBattle);
 
 // ---------- CPU ships ----------
 function generateCpuShips() {
@@ -1179,6 +1352,7 @@ function generateCpuShips() {
 // ---------- Guessing phase ----------
 function startGuessingPhase() {
   state.phase = 'guess';
+  state.place.lock = null;
   state.place.anchor = null;
   state.place.hover = null;
   state.place.dragging = false;
@@ -1487,6 +1661,7 @@ function resetGame() {
   state.place.hover = null;
   state.place.dragging = false;
   state.place.msg = '';
+  state.place.lock = null;
   setStatus(placeStatusLine());
   updatePlaceBanner(true);
   renderFleets();
